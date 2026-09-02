@@ -235,7 +235,6 @@ async function getEntityAttributes(entityLogicalName) {
   }));
 }
 
-
 // Field metadata for schema
 async function getFieldMetadata(entityLogicalName) {
   if (!DATAVERSE_BASE_URL) {
@@ -362,7 +361,6 @@ async function getValidAttributeNames(entityLogicalName) {
   });
   return set;
 }
-
 
 // Save schema XML
 async function saveSchemaXml(schemaXml) {
@@ -560,6 +558,61 @@ async function importData(targetBaseUrl, schemaXml, fileName, fileContent) {
   }
 }
 
+// Get environments from open CRM/Dataverse tabs
+async function getEnvironmentsFromOpenTabs() {
+  // Query all tabs in the current window (or all windows if you prefer)
+  const tabs = await chrome.tabs.query({});
+
+  const envMap = new Map(); // url -> name
+
+  for (const tab of tabs) {
+    if (!tab.url) continue;
+
+    try {
+      const url = new URL(tab.url);
+
+      // Match Dataverse/Dynamics CRM hosts
+      if (/\.crm(\d+)?\.dynamics\.com$/i.test(url.hostname)) {
+        const baseUrl = url.origin; // e.g. https://org.crm.dynamics.com
+
+        // Use hostname as name; you can customize this
+        const name = url.hostname;
+
+        if (!envMap.has(baseUrl)) {
+          envMap.set(baseUrl, name);
+        }
+      }
+    } catch (e) {
+      // Ignore invalid URLs
+      continue;
+    }
+  }
+
+  const envs = [];
+
+  // Add current base URL (if set) as "Current Org"
+  if (DATAVERSE_BASE_URL) {
+    envs.push({
+      name: 'Current Org',
+      url: DATAVERSE_BASE_URL
+    });
+  }
+
+  // Add all other discovered environments from tabs
+  for (const [url, name] of envMap.entries()) {
+    // Avoid duplicate Current Org
+    if (url === DATAVERSE_BASE_URL) continue;
+
+    envs.push({
+      name,
+      url
+    });
+  }
+
+  // If nothing found, you can still return Current Org or empty list
+  return envs;
+}
+
 // Message handler
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
@@ -600,6 +653,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         case 'IMPORT_DATA':
           await importData(message.targetBaseUrl, message.schemaXml, message.fileName, message.fileContent);
           sendResponse({ ok: true });
+          break;
+
+        // Environments list for import UI
+        case 'GET_ENVIRONMENTS':
+          // Static list for now; replace with real discovery/MSAL if needed
+          const envs = await getEnvironmentsFromOpenTabs();
+          sendResponse(envs);
           break;
 
         default:

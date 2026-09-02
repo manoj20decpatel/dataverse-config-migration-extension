@@ -6,6 +6,23 @@ function sendToBackground(message) {
   });
 }
 
+// Toast helper
+function showToast(message, timeoutMs = 3000) {
+  const container = document.getElementById('toastContainer');
+  if (!container) return;
+
+  const toast = document.createElement('div');
+  toast.className = 'toast';
+  toast.textContent = message;
+  container.appendChild(toast);
+
+  setTimeout(() => {
+    if (toast.parentNode === container) {
+      container.removeChild(toast);
+    }
+  }, timeoutMs);
+}
+
 // Get current tab origin and inform background
 async function initDataverseBaseUrl() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -37,13 +54,59 @@ async function populateEntityList(entityList) {
 
     entities.forEach(e => {
       const opt = document.createElement('option');
-      opt.value = e.logicalName;      // editable dropdown uses logical name as value
+      opt.value = e.logicalName;
       opt.textContent = e.displayName;
       entityList.appendChild(opt);
     });
   } catch (err) {
     console.error('Error populating entity list', err);
   }
+}
+
+// Helper: populate environments for import (radio buttons)
+async function populateEnvironmentList(envRadioList) {
+  envRadioList.innerHTML = '';
+
+  const envs = await sendToBackground({ type: 'GET_ENVIRONMENTS' }) || [];
+
+  envs.forEach((env, index) => {
+    const div = document.createElement('div');
+    div.className = 'env-radio-item';
+
+    const id = `envRadio_${index}`;
+    const radio = document.createElement('input');
+    radio.type = 'radio';
+    radio.name = 'envRadio';
+    radio.value = env.url;
+    radio.id = id;
+
+    const label = document.createElement('label');
+    label.htmlFor = id;
+    label.textContent = `${env.name} (${env.url})`;
+
+    div.appendChild(radio);
+    div.appendChild(label);
+    envRadioList.appendChild(div);
+  });
+
+  // Add "None of the above"
+  const noneDiv = document.createElement('div');
+  noneDiv.className = 'env-radio-item';
+
+  const noneId = 'envRadio_none';
+  const noneRadio = document.createElement('input');
+  noneRadio.type = 'radio';
+  noneRadio.name = 'envRadio';
+  noneRadio.value = 'none';
+  noneRadio.id = noneId;
+
+  const noneLabel = document.createElement('label');
+  noneLabel.htmlFor = noneId;
+  noneLabel.textContent = 'None of the above';
+
+  noneDiv.appendChild(noneRadio);
+  noneDiv.appendChild(noneLabel);
+  envRadioList.appendChild(noneDiv);
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -56,7 +119,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   const schemaModal = document.getElementById('schemaModal');
   const btnAddEntity = document.getElementById('btnAddEntity');
-  const btnSaveSchema = document.getElementById('btnSaveSchema'); // "Export Schema"
+  const btnSaveSchema = document.getElementById('btnSaveSchema');
   const btnCloseSchemaX = document.getElementById('btnCloseSchemaX');
 
   const entityInput = document.getElementById('entityInput');
@@ -70,25 +133,33 @@ document.addEventListener('DOMContentLoaded', async () => {
   const schemaFileInput = document.getElementById('schemaFileInput');
   const dataFileInput = document.getElementById('dataFileInput');
 
-  // State for import flow
+  // Import modal elements
+  const importModal = document.getElementById('importModal');
+  const btnCloseImportX = document.getElementById('btnCloseImportX');
+  const envRadioList = document.getElementById('envRadioList');
+  const manualEnvContainer = document.getElementById('manualEnvContainer');
+  const manualEnvUrlInput = document.getElementById('manualEnvUrl');
+  const dataFileInputImport = document.getElementById('dataFileInputImport');
+  const schemaFileInputImport = document.getElementById('schemaFileInputImport');
+  const btnImportDataStart = document.getElementById('btnImportDataStart');
+
+  // State for import flow (new UI)
   let importTargetUrl = null;
   let importDataFileName = null;
   let importDataContent = null;
+  let importSchemaFileName = null;
+  let importSchemaContent = null;
 
-  // State for multi-table schema: { logicalName, disablePlugins, attributes: [{ logicalName, compareUpdate, createOnly }] }
+  // State for multi-table schema
   window.entityConfigCollection = [];
 
-  // Initial population of editable dropdown (datalist) on popup load
   await populateEntityList(entityList);
 
-  // Open schema modal and (re)load entities
+  // --- Schema Modal logic ---
   btnCreateSchema.addEventListener('click', async () => {
-    schemaModal.classList.add('show');      // SHOW schema dialog
-
-    // Re-populate in case entities changed or base URL became available later
+    schemaModal.classList.add('show');
     await populateEntityList(entityList);
 
-    // Clear previous selection when opening
     entityInput.value = '';
     attributeSearch.value = '';
     attributesGridBody.innerHTML = '';
@@ -99,7 +170,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     window.currentFieldMetadataMap = null;
   });
 
-  // On entity selection (user typing or picking from datalist), load metadata and attributes
   entityInput.addEventListener('change', async () => {
     const entityLogicalName = entityInput.value;
     if (!entityLogicalName) return;
@@ -135,11 +205,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       disablePluginsCheckbox.checked = false;
     }
 
-    // Reset All Custom Fields checkbox when entity changes
     allCustomFieldsCheckbox.checked = false;
   });
 
-  // Attribute search filter
   attributeSearch.addEventListener('input', () => {
     const term = attributeSearch.value.toLowerCase();
     Array.from(attributesGridBody.querySelectorAll('tr')).forEach(tr => {
@@ -148,7 +216,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
-  // Header "select all" checkbox
   selectAllFieldsCheckbox.addEventListener('change', () => {
     const checked = selectAllFieldsCheckbox.checked;
     Array.from(attributesGridBody.querySelectorAll('tr')).forEach(tr => {
@@ -168,14 +235,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     });
 
-    // If user manually toggles Select All, clear All Custom Fields checkbox
     allCustomFieldsCheckbox.checked = false;
   });
 
-  // NEW: All Custom Fields checkbox logic
+  // All Custom Fields checkbox
   allCustomFieldsCheckbox.addEventListener('change', () => {
     const checked = allCustomFieldsCheckbox.checked;
-
     const fieldMetadataMap = window.currentFieldMetadataMap || {};
 
     Array.from(attributesGridBody.querySelectorAll('tr')).forEach(tr => {
@@ -189,7 +254,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       const isCustomField = meta && meta.customField;
 
       if (isCustomField && !selectCb.disabled) {
-        // Only affect custom fields
         selectCb.checked = checked;
         compareCb.disabled = !checked;
         createCb.disabled = !checked;
@@ -201,7 +265,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     });
 
-    // After toggling All Custom Fields, recompute Select All header state
     const rows = Array.from(attributesGridBody.querySelectorAll('tr'));
     const allSelected = rows.length > 0 && rows.every(row => {
       const cb = row.querySelector('.field-select');
@@ -210,16 +273,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     selectAllFieldsCheckbox.checked = allSelected;
   });
 
-  // ADD: collect current entity into collection and clear UI
   btnAddEntity.addEventListener('click', () => {
     const entityLogicalName = entityInput.value;
     if (!entityLogicalName) {
-      alert('Please select a table/entity before adding.');
+      showToast('Please select a table/entity before adding.');
       return;
     }
 
     const entityMetadata = window.currentEntityMetadata || {};
-    const fieldMetadataMap = window.currentFieldMetadataMap || {};
     const disablePlugins = disablePluginsCheckbox.checked;
 
     const attributes = [];
@@ -234,13 +295,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         return;
       }
 
-      const compareUpdate = compareCb.checked;
-      const createOnly = createCb.checked;
-
       attributes.push({
         logicalName,
-        compareUpdate,
-        createOnly
+        compareUpdate: compareCb.checked,
+        createOnly: createCb.checked
       });
     });
 
@@ -255,11 +313,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     if (attributes.length === 0) {
-      alert('No fields selected for this table. Please select at least one field.');
+      showToast('No fields selected for this table. Please select at least one field.');
       return;
     }
 
-    // Last one wins: remove any existing config for this entity
     window.entityConfigCollection = window.entityConfigCollection.filter(
       e => e.logicalName !== entityLogicalName
     );
@@ -270,7 +327,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       attributes
     });
 
-    // Clear UI for next table
     entityInput.value = '';
     attributesGridBody.innerHTML = '';
     selectAllFieldsCheckbox.checked = false;
@@ -280,13 +336,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     window.currentEntityMetadata = null;
     window.currentFieldMetadataMap = null;
 
-    alert('Entity added/updated in schema collection. Select another table or click Export Schema.');
+    showToast('Entity added/updated in schema collection. Select another table or click Export Schema.', 4000);
   });
 
-  // EXPORT SCHEMA (previously Save Schema XML): build full <entities> XML from collection and download
   btnSaveSchema.addEventListener('click', async () => {
     if (!window.entityConfigCollection || window.entityConfigCollection.length === 0) {
-      alert('No entities in schema collection. Use Add to collect at least one entity.');
+      showToast('No entities in schema collection. Use Add to collect at least one entity.');
       return;
     }
 
@@ -297,9 +352,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       schemaXml
     });
 
-    alert('Multi-table Schema XML exported.');
+    showToast('Multi-table Schema XML exported.', 4000);
 
-    // Clear collection and UI after export
     window.entityConfigCollection = [];
     entityInput.value = '';
     attributesGridBody.innerHTML = '';
@@ -309,39 +363,24 @@ document.addEventListener('DOMContentLoaded', async () => {
     allCustomFieldsCheckbox.checked = false;
     window.currentEntityMetadata = null;
     window.currentFieldMetadataMap = null;
-
-    // Optional: also hide the schema dialog after exporting
-    // schemaModal.classList.remove('show');
   });
 
-  // CLOSE X: hide modal and clear fields/grid/state AND entity collection
   btnCloseSchemaX.addEventListener('click', () => {
-    // HIDE schema dialog
     schemaModal.classList.remove('show');
 
-    // Clear entity editable dropdown
     entityInput.value = '';
-
-    // Clear search textbox
     attributeSearch.value = '';
-
-    // Clear grid and checkboxes
     attributesGridBody.innerHTML = '';
     selectAllFieldsCheckbox.checked = false;
     disablePluginsCheckbox.checked = false;
     allCustomFieldsCheckbox.checked = false;
-
-    // Clear current metadata
     window.currentEntityMetadata = null;
     window.currentFieldMetadataMap = null;
-
-    // Clear the collected entity schema configuration
     window.entityConfigCollection = [];
   });
 
-  // EXPORT DATA
+  // --- Export Data ---
   btnExportData.addEventListener('click', () => {
-    // Clear All Custom Fields checkbox when export data is initiated (per your requirement: "export")
     allCustomFieldsCheckbox.checked = false;
 
     schemaFileInput.onchange = async () => {
@@ -354,69 +393,142 @@ document.addEventListener('DOMContentLoaded', async () => {
         type: 'EXPORT_DATA',
         schemaXml
       });
-      alert('Export initiated. Check your downloads for config_migration_data.json.');
+      showToast('Export initiated. Check your downloads for config_migration_data.json.', 4000);
     };
 
     schemaFileInput.click();
   });
 
-  // IMPORT STEP 1
-  btnImportData.addEventListener('click', () => {
-    const targetUrl = prompt('Enter target Dataverse base URL (e.g., https://org.crm.dynamics.com):');
-    if (!targetUrl) return;
+  // --- Import Modal logic ---
+  btnImportData.addEventListener('click', async () => {
+    importModal.classList.add('show');
 
-    importTargetUrl = targetUrl;
+    importTargetUrl = null;
     importDataFileName = null;
     importDataContent = null;
+    importSchemaFileName = null;
+    importSchemaContent = null;
+    manualEnvUrlInput.value = '';
+    manualEnvContainer.style.display = 'none';
+    btnImportDataStart.disabled = true;
+    dataFileInputImport.value = '';
+    schemaFileInputImport.value = '';
 
-    dataFileInput.onchange = async () => {
-      const dataFile = dataFileInput.files[0];
-      dataFileInput.value = '';
-      if (!dataFile) return;
+    await populateEnvironmentList(envRadioList);
 
-      importDataFileName = dataFile.name;
-      importDataContent = await dataFile.text();
-
-      btnSelectSchemaForImport.style.display = '';
-      alert('Data file loaded. Now click "Select Schema for Import" to choose the schema XML.');
-    };
-
-    dataFileInput.click();
+    Array.from(envRadioList.querySelectorAll('input[type="radio"]')).forEach(radio => {
+      radio.addEventListener('change', () => {
+        if (radio.value === 'none') {
+          manualEnvContainer.style.display = '';
+          importTargetUrl = manualEnvUrlInput.value || null;
+        } else {
+          manualEnvContainer.style.display = 'none';
+          importTargetUrl = radio.value;
+        }
+        updateImportButtonState();
+      });
+    });
   });
 
-  // IMPORT STEP 2
-  btnSelectSchemaForImport.addEventListener('click', () => {
-    if (!importTargetUrl || !importDataContent || !importDataFileName) {
-      alert('Please select a data file first using "Import Data".');
+  manualEnvUrlInput.addEventListener('input', () => {
+    const noneRadio = envRadioList.querySelector('input[type="radio"][value="none"]');
+    if (noneRadio && noneRadio.checked) {
+      importTargetUrl = manualEnvUrlInput.value || null;
+      updateImportButtonState();
+    }
+  });
+
+  dataFileInputImport.addEventListener('change', async () => {
+    const file = dataFileInputImport.files[0];
+    if (!file) {
+      importDataFileName = null;
+      importDataContent = null;
+    } else {
+      importDataFileName = file.name;
+      importDataContent = await file.text();
+      showToast(`Data file "${importDataFileName}" loaded.`, 3000);
+    }
+    updateImportButtonState();
+  });
+
+  schemaFileInputImport.addEventListener('change', async () => {
+    const file = schemaFileInputImport.files[0];
+    if (!file) {
+      importSchemaFileName = null;
+      importSchemaContent = null;
+    } else {
+      importSchemaFileName = file.name;
+      importSchemaContent = await file.text();
+      showToast(`Schema file "${importSchemaFileName}" loaded.`, 3000);
+    }
+    updateImportButtonState();
+  });
+
+  function updateImportButtonState() {
+    const hasEnv = !!importTargetUrl;
+    const hasData = !!importDataContent;
+    const hasSchema = !!importSchemaContent;
+    btnImportDataStart.disabled = !(hasEnv && hasData && hasSchema);
+  }
+
+  // Close Import dialog and clear selections
+  btnCloseImportX.addEventListener('click', () => {
+    importModal.classList.remove('show');
+
+    importTargetUrl = null;
+    importDataFileName = null;
+    importDataContent = null;
+    importSchemaFileName = null;
+    importSchemaContent = null;
+    manualEnvUrlInput.value = '';
+    manualEnvContainer.style.display = 'none';
+    btnImportDataStart.disabled = true;
+
+    Array.from(envRadioList.querySelectorAll('input[type="radio"]')).forEach(radio => {
+      radio.checked = false;
+    });
+
+    dataFileInputImport.value = '';
+    schemaFileInputImport.value = '';
+  });
+
+  btnImportDataStart.addEventListener('click', async () => {
+    if (!importTargetUrl || !importDataContent || !importSchemaContent) {
+      showToast('Please select environment, data file, and schema file before importing.');
       return;
     }
 
-    schemaFileInput.onchange = async () => {
-      const schemaFile = schemaFileInput.files[0];
-      schemaFileInput.value = '';
-      if (!schemaFile) return;
+    importModal.classList.remove('show');
 
-      const schemaXml = await schemaFile.text();
-      await sendToBackground({
-        type: 'IMPORT_DATA',
-        targetBaseUrl: importTargetUrl,
-        schemaXml,
-        fileName: importDataFileName,
-        fileContent: importDataContent
-      });
+    showToast('Import started…', 3000);
 
-      alert('Import initiated (check console for errors).');
-      btnSelectSchemaForImport.style.display = 'none';
-      importTargetUrl = null;
-      importDataFileName = null;
-      importDataContent = null;
-    };
+    await sendToBackground({
+      type: 'IMPORT_DATA',
+      targetBaseUrl: importTargetUrl,
+      schemaXml: importSchemaContent,
+      fileName: importDataFileName,
+      fileContent: importDataContent
+    });
 
-    schemaFileInput.click();
+    showToast('Import completed.', 4000);
+
+    importTargetUrl = null;
+    importDataFileName = null;
+    importDataContent = null;
+    importSchemaFileName = null;
+    importSchemaContent = null;
+    manualEnvUrlInput.value = '';
+    manualEnvContainer.style.display = 'none';
+    btnImportDataStart.disabled = true;
+    dataFileInputImport.value = '';
+    schemaFileInputImport.value = '';
+    Array.from(envRadioList.querySelectorAll('input[type="radio"]')).forEach(radio => {
+      radio.checked = false;
+    });
   });
 });
 
-// Build the attributes grid with Select / Attribute / Display Name / Type / Compare / Create
+// Grid & schema helpers
 function buildAttributesGrid(tbody, attributes, selectAllFieldsCheckbox, fieldMetadataMap, existingConfig) {
   tbody.innerHTML = '';
   selectAllFieldsCheckbox.checked = false;
@@ -442,7 +554,6 @@ function buildAttributesGrid(tbody, attributes, selectAllFieldsCheckbox, fieldMe
 
     const prev = existingAttrMap[attr.logicalName];
 
-    // Select
     const tdSelect = document.createElement('td');
     tdSelect.className = 'col-select';
     const selectCb = document.createElement('input');
@@ -450,29 +561,24 @@ function buildAttributesGrid(tbody, attributes, selectAllFieldsCheckbox, fieldMe
     selectCb.className = 'field-select';
     tdSelect.appendChild(selectCb);
 
-    // Attribute (logical name)
     const tdAttribute = document.createElement('td');
     tdAttribute.className = 'col-attribute';
     tdAttribute.textContent = attr.logicalName;
 
-    // Display Name
     const tdDisplayName = document.createElement('td');
     tdDisplayName.className = 'col-displayname';
     tdDisplayName.textContent = displayName;
 
-    // Type
     const tdType = document.createElement('td');
     tdType.className = 'col-type';
     tdType.textContent = type;
 
-    // Compare/Update
     const tdCompareUpdate = document.createElement('td');
     tdCompareUpdate.className = 'col-compare';
     const chkCompareUpdate = document.createElement('input');
     chkCompareUpdate.type = 'checkbox';
     chkCompareUpdate.className = 'field-compare';
 
-    // Create Only
     const tdCreateOnly = document.createElement('td');
     tdCreateOnly.className = 'col-create';
     const chkCreateOnly = document.createElement('input');
@@ -495,7 +601,6 @@ function buildAttributesGrid(tbody, attributes, selectAllFieldsCheckbox, fieldMe
     tr.appendChild(tdCreateOnly);
 
     if (isPrimaryKey) {
-      // Primary key: always selected and locked
       selectCb.checked = true;
       selectCb.disabled = true;
 
@@ -506,7 +611,7 @@ function buildAttributesGrid(tbody, attributes, selectAllFieldsCheckbox, fieldMe
         chkCompareUpdate.checked = !!prev.compareUpdate;
         chkCreateOnly.checked = !!prev.createOnly;
       } else {
-        chkCompareUpdate.checked = true;   // default for primary key
+        chkCompareUpdate.checked = true;
         chkCreateOnly.checked = false;
       }
     } else {
@@ -543,7 +648,6 @@ function buildAttributesGrid(tbody, attributes, selectAllFieldsCheckbox, fieldMe
   selectAllFieldsCheckbox.checked = false;
 }
 
-// Build <entity>...</entity> fragment for one table
 function buildEntityXmlFragment(entityLogicalName, attributes, disablePlugins, entityMetadata, fieldMetadataMap) {
   const esc = (s) => {
     if (s === null || s === undefined) return '';
@@ -595,7 +699,6 @@ function buildEntityXmlFragment(entityLogicalName, attributes, disablePlugins, e
   return xml;
 }
 
-// Build full <entities> schema from collection
 async function buildFullSchemaXmlFromCollection(entityConfigCollection) {
   let xml = `<?xml version="1.0" encoding="utf-8"?>\n`;
   xml += `<entities>\n`;

@@ -50,10 +50,9 @@
       cursor: default;
     }
 
-    /* Modal styled like a CE dialog */
+    /* Schema Modal */
     #schemaModal {
       display: none;
-      /* hidden by default */
       position: fixed;
       top: 8%;
       left: 8%;
@@ -66,13 +65,11 @@
       z-index: 9999;
     }
 
-    /* When .show is applied, display the dialog as flex */
     #schemaModal.show {
       display: flex;
       flex-direction: column;
     }
 
-    /* Header area inside modal */
     .schema-header {
       display: flex;
       align-items: center;
@@ -87,7 +84,6 @@
       color: #201f1e;
     }
 
-    /* Close X button in top-right corner */
     #btnCloseSchemaX {
       border: none;
       background: transparent;
@@ -101,7 +97,6 @@
 
     #btnCloseSchemaX:hover {
       color: #a4262c;
-      /* red-ish hover */
     }
 
     .section {
@@ -140,7 +135,6 @@
       font-size: 12px;
     }
 
-    /* Buttons above grid, static */
     .schema-actions {
       margin-top: 4px;
       margin-bottom: 4px;
@@ -149,7 +143,6 @@
       justify-content: flex-end;
     }
 
-    /* Grid container: header static, body scroll */
     .grid-container {
       border: 1px solid #c8c6c4;
       border-radius: 2px;
@@ -212,7 +205,6 @@
       background-color: #edebe9;
     }
 
-    /* Column widths */
     .col-select {
       width: 50px;
       text-align: center;
@@ -240,6 +232,124 @@
       width: 14%;
       text-align: center;
     }
+
+    /* Import Modal */
+    #importModal {
+      display: none;
+      /* hidden by default */
+      position: fixed;
+      top: 10%;
+      left: 10%;
+      width: 80%;
+      max-height: 80%;
+      background: #ffffff;
+      border: 1px solid #c8c6c4;
+      box-shadow: 0 0 8px rgba(0, 0, 0, 0.2);
+      padding: 12px;
+      z-index: 9999;
+    }
+
+    #importModal.show {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .import-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+
+    .import-header h4 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 600;
+      color: #201f1e;
+    }
+
+    #btnCloseImportX {
+      border: none;
+      background: transparent;
+      color: #201f1e;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+      padding: 0 4px;
+      line-height: 1;
+    }
+
+    #btnCloseImportX:hover {
+      color: #a4262c;
+    }
+
+    .import-section {
+      margin-bottom: 8px;
+    }
+
+    .env-radio-list {
+      border: 1px solid #c8c6c4;
+      padding: 6px;
+      max-height: 140px;
+      overflow-y: auto;
+    }
+
+    .env-radio-item {
+      margin-bottom: 4px;
+      font-size: 12px;
+    }
+
+    #manualEnvUrl {
+      width: 100%;
+      padding: 2px 4px;
+      border: 1px solid #c8c6c4;
+      border-radius: 2px;
+      font-size: 12px;
+      margin-top: 4px;
+    }
+
+    .import-actions {
+      margin-top: 8px;
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    /* Toasts */
+    #toastContainer {
+      position: fixed;
+      bottom: 12px;
+      right: 12px;
+      z-index: 10000;
+      display: flex;
+      flex-direction: column-reverse;
+      gap: 4px;
+      pointer-events: none;
+    }
+
+    .toast {
+      background: #323130;
+      color: #ffffff;
+      padding: 6px 10px;
+      border-radius: 2px;
+      font-size: 11px;
+      max-width: 280px;
+      box-shadow: 0 0 4px rgba(0, 0, 0, 0.4);
+      opacity: 0.95;
+      animation: toast-slide-up 0.3s ease-out;
+    }
+
+    @keyframes toast-slide-up {
+      from {
+        transform: translateY(10px);
+        opacity: 0;
+      }
+
+      to {
+        transform: translateY(0);
+        opacity: 0.95;
+      }
+    }
   </style>
 </head>
 
@@ -257,13 +367,11 @@
   <div id="schemaModal">
     <div class="schema-header">
       <h4>Create Schema (multi-table)</h4>
-      <!-- Close X button -->
       <button id="btnCloseSchemaX" aria-label="Close schema dialog">×</button>
     </div>
 
     <div class="section">
       <label for="entityInput">Table (entity logical name)</label><br>
-      <!-- Editable dropdown: input + datalist -->
       <input list="entityList" id="entityInput" placeholder="Select or type table logical name">
       <datalist id="entityList"></datalist>
     </div>
@@ -274,7 +382,6 @@
         <input type="checkbox" id="disablePluginsCheckbox">
         Disable plugins on import
       </label>
-      <!-- New: All Custom Fields checkbox below search -->
       <div style="margin-top:4px;">
         <label class="checkbox-inline">
           <input type="checkbox" id="allCustomFieldsCheckbox">
@@ -285,14 +392,12 @@
 
     <div class="schema-actions">
       <button id="btnAddEntity">Add</button>
-      <!-- Renamed and tooltip added -->
       <button id="btnSaveSchema" title="This can be used in Microsoft Configuration Migration Tool">
         Export Schema
       </button>
     </div>
 
     <div class="grid-container">
-      <!-- Static header -->
       <div class="grid-header">
         <table>
           <thead>
@@ -309,7 +414,6 @@
           </thead>
         </table>
       </div>
-      <!-- Scrollable body -->
       <div class="grid-body">
         <table>
           <tbody id="attributesGridBody">
@@ -319,7 +423,43 @@
     </div>
   </div>
 
-  <!-- Hidden file inputs -->
+  <!-- Import Modal -->
+  <div id="importModal">
+    <div class="import-header">
+      <h4>Import Configuration Data</h4>
+      <button id="btnCloseImportX" aria-label="Close import dialog">×</button>
+    </div>
+
+    <div class="import-section">
+      <label>Target Environment</label>
+      <div id="envRadioList" class="env-radio-list">
+        <!-- Radio buttons injected here -->
+      </div>
+      <div id="manualEnvContainer" style="margin-top:4px; display:none;">
+        <label for="manualEnvUrl">Environment URL</label>
+        <input type="text" id="manualEnvUrl" placeholder="https://org.crm.dynamics.com">
+      </div>
+    </div>
+
+    <div class="import-section">
+      <label for="dataFileInputImport">Select Data File (JSON)</label><br>
+      <input type="file" id="dataFileInputImport" accept=".json">
+    </div>
+
+    <div class="import-section">
+      <label for="schemaFileInputImport">Select Schema (XML)</label><br>
+      <input type="file" id="schemaFileInputImport" accept=".xml">
+    </div>
+
+    <div class="import-actions">
+      <button id="btnImportDataStart" disabled>Import Data</button>
+    </div>
+  </div>
+
+  <!-- Toast container -->
+  <div id="toastContainer"></div>
+
+  <!-- Old hidden file inputs (still used by export data) -->
   <input type="file" id="schemaFileInput" accept=".xml" style="display:none;">
   <input type="file" id="dataFileInput" accept=".json" style="display:none;">
 
