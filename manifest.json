@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "Config Migration Extension (POC)",
+  "version": "1.0",
+  "description": "Replica of Config Migration Tool: create schema, export, import (multi-table).",
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "permissions": [
+    "storage",
+    "downloads",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://*.crm.dynamics.com/*",
+    "https://*.crm2.dynamics.com/*",
+    "https://*.crm3.dynamics.com/*",
+    "https://*.crm4.dynamics.com/*",
+    "https://*.crm5.dynamics.com/*",
+    "https://*.crm6.dynamics.com/*",
+    "https://*.crm7.dynamics.com/*",
+    "https://*.crm8.dynamics.com/*",
+    "https://*.crm9.dynamics.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  }
+}
