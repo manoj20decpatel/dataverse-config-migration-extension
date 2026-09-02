@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <title>Config Migration Extension</title>
+  <style>
+    /* Base layout and theme similar to Dynamics 365 */
+    body {
+      font-family: "Segoe UI", Arial, sans-serif;
+      font-size: 12px;
+      color: #323130;
+      background-color: #ffffff;
+      min-width: 640px;
+      min-height: 480px;
+      margin: 0;
+      padding: 12px;
+    }
+
+    h3 {
+      margin: 0 0 8px 0;
+      font-size: 16px;
+      font-weight: 600;
+      color: #201f1e;
+    }
+
+    .toolbar {
+      margin-bottom: 8px;
+      display: flex;
+      gap: 8px;
+    }
+
+    button {
+      font-family: "Segoe UI", Arial, sans-serif;
+      font-size: 12px;
+      padding: 4px 10px;
+      border: 1px solid #8a8886;
+      border-radius: 2px;
+      background-color: #f3f2f1;
+      color: #201f1e;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background-color: #e1dfdd;
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: default;
+    }
+
+    /* Modal styled like a CE dialog */
+    #schemaModal {
+      display: none;
+      /* hidden by default */
+      position: fixed;
+      top: 8%;
+      left: 8%;
+      width: 84%;
+      height: 84%;
+      background: #ffffff;
+      border: 1px solid #c8c6c4;
+      box-shadow: 0 0 8px rgba(0, 0, 0, 0.2);
+      padding: 12px;
+      z-index: 9999;
+    }
+
+    /* When .show is applied, display the dialog as flex */
+    #schemaModal.show {
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Header area inside modal */
+    .schema-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+
+    .schema-header h4 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 600;
+      color: #201f1e;
+    }
+
+    /* Close X button in top-right corner */
+    #btnCloseSchemaX {
+      border: none;
+      background: transparent;
+      color: #201f1e;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+      padding: 0 4px;
+      line-height: 1;
+    }
+
+    #btnCloseSchemaX:hover {
+      color: #a4262c;
+      /* red-ish hover */
+    }
+
+    .section {
+      margin-bottom: 8px;
+    }
+
+    .section label {
+      font-weight: 600;
+      display: inline-block;
+      margin-bottom: 2px;
+    }
+
+    /* Editable dropdown (input + datalist) */
+    #entityInput {
+      width: 260px;
+      padding: 2px 4px;
+      border: 1px solid #c8c6c4;
+      border-radius: 2px;
+      font-size: 12px;
+      background-color: #ffffff;
+    }
+
+    /* Search textbox matches width of entity input */
+    #attributeSearch {
+      width: 260px;
+      padding: 2px 4px;
+      border: 1px solid #c8c6c4;
+      border-radius: 2px;
+      font-size: 12px;
+    }
+
+    .checkbox-inline {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 12px;
+    }
+
+    /* Buttons above grid, static */
+    .schema-actions {
+      margin-top: 4px;
+      margin-bottom: 4px;
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    /* Grid container: header static, body scroll */
+    .grid-container {
+      border: 1px solid #c8c6c4;
+      border-radius: 2px;
+      margin-top: 4px;
+      display: flex;
+      flex-direction: column;
+      height: 60%;
+      min-height: 220px;
+    }
+
+    .grid-header {
+      background-color: #f3f2f1;
+      border-bottom: 1px solid #e1dfdd;
+    }
+
+    .grid-header table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+
+    .grid-header th {
+      padding: 4px 6px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #201f1e;
+      text-align: left;
+      border-right: 1px solid #e1dfdd;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .grid-body {
+      flex: 1;
+      overflow-y: auto;
+    }
+
+    .grid-body table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+
+    .grid-body td {
+      padding: 4px 6px;
+      font-size: 12px;
+      border-bottom: 1px solid #e1dfdd;
+      border-right: 1px solid #e1dfdd;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .grid-body tr:nth-child(even) {
+      background-color: #faf9f8;
+    }
+
+    .grid-body tr:hover {
+      background-color: #edebe9;
+    }
+
+    /* Column widths */
+    .col-select {
+      width: 50px;
+      text-align: center;
+    }
+
+    .col-attribute {
+      width: 22%;
+    }
+
+    .col-displayname {
+      width: 28%;
+    }
+
+    .col-type {
+      width: 14%;
+      text-align: center;
+    }
+
+    .col-compare {
+      width: 14%;
+      text-align: center;
+    }
+
+    .col-create {
+      width: 14%;
+      text-align: center;
+    }
+  </style>
+</head>
+
+<body>
+  <h3>Configuration Migration (Browser)</h3>
+
+  <div class="toolbar">
+    <button id="btnCreateSchema">Create Schema</button>
+    <button id="btnExportData">Export Data</button>
+    <button id="btnImportData">Import Data</button>
+    <button id="btnSelectSchemaForImport" style="display:none;">Select Schema for Import</button>
+  </div>
+
+  <!-- Create Schema Modal -->
+  <div id="schemaModal">
+    <div class="schema-header">
+      <h4>Create Schema (multi-table)</h4>
+      <!-- Close X button -->
+      <button id="btnCloseSchemaX" aria-label="Close schema dialog">×</button>
+    </div>
+
+    <div class="section">
+      <label for="entityInput">Table (entity logical name)</label><br>
+      <!-- Editable dropdown: input + datalist -->
+      <input list="entityList" id="entityInput" placeholder="Select or type table logical name">
+      <datalist id="entityList"></datalist>
+    </div>
+
+    <div class="section">
+      <input type="text" id="attributeSearch" placeholder="Search attribute">
+      <label class="checkbox-inline" style="margin-left:12px;">
+        <input type="checkbox" id="disablePluginsCheckbox">
+        Disable plugins on import
+      </label>
+      <!-- New: All Custom Fields checkbox below search -->
+      <div style="margin-top:4px;">
+        <label class="checkbox-inline">
+          <input type="checkbox" id="allCustomFieldsCheckbox">
+          All Custom Fields
+        </label>
+      </div>
+    </div>
+
+    <div class="schema-actions">
+      <button id="btnAddEntity">Add</button>
+      <!-- Renamed and tooltip added -->
+      <button id="btnSaveSchema" title="This can be used in Microsoft Configuration Migration Tool">
+        Export Schema
+      </button>
+    </div>
+
+    <div class="grid-container">
+      <!-- Static header -->
+      <div class="grid-header">
+        <table>
+          <thead>
+            <tr>
+              <th class="col-select">
+                <input type="checkbox" id="selectAllFields">
+              </th>
+              <th class="col-attribute">Attribute</th>
+              <th class="col-displayname">Display Name</th>
+              <th class="col-type">Type</th>
+              <th class="col-compare">Compare/Update</th>
+              <th class="col-create">Create Only</th>
+            </tr>
+          </thead>
+        </table>
+      </div>
+      <!-- Scrollable body -->
+      <div class="grid-body">
+        <table>
+          <tbody id="attributesGridBody">
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hidden file inputs -->
+  <input type="file" id="schemaFileInput" accept=".xml" style="display:none;">
+  <input type="file" id="dataFileInput" accept=".json" style="display:none;">
+
+  <script src="popup.js"></script>
+</body>
+
+</html>
