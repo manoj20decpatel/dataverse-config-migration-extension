@@ -1002,11 +1002,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     showToast(`${groupName} created.`, 3000);
   });
 
-
-
-
-
-
   btnApplyFilter.addEventListener('click', () => {
     const activeRows = filterRowsState.filter(r => r && r.enabled && r.fieldLogicalName);
     if (!activeRows.length) {
@@ -1617,24 +1612,70 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function ungroup(groupId) {
-    const group = filterGroups.find(g => g.id === groupId);
-    if (!group) return;
+    const groupIndex = filterGroups.findIndex(g => g.id === groupId);
+    if (groupIndex === -1) return;
 
-    // Detach this group from its parent, if any
-    if (group.parentGroupId) {
-      const parent = filterGroups.find(g => g.id === group.parentGroupId);
+    const group = filterGroups[groupIndex];
+
+    // Remember parent before we remove this group
+    const parentGroupId = group.parentGroupId;
+
+    if (parentGroupId) {
+      // Attach this group's rows and child groups to its parent
+      const parent = filterGroups.find(g => g.id === parentGroupId);
       if (parent) {
+        // Move rows up
+        group.rowIds.forEach(rowId => {
+          // Update row state
+          const rowState = filterRowsState.find(r => r && r.id === rowId);
+          if (rowState) {
+            rowState.parentGroupId = parentGroupId;
+          }
+          // Attach to parent group
+          if (!parent.rowIds.includes(rowId)) {
+            parent.rowIds.push(rowId);
+          }
+        });
+
+        // Move child groups up
+        group.childGroupIds.forEach(childId => {
+          const childGroup = filterGroups.find(g => g.id === childId);
+          if (childGroup) {
+            childGroup.parentGroupId = parentGroupId;
+          }
+          if (!parent.childGroupIds.includes(childId)) {
+            parent.childGroupIds.push(childId);
+          }
+        });
+
+        // Remove this group from parent's childGroupIds
         parent.childGroupIds = parent.childGroupIds.filter(id => id !== groupId);
       }
-      group.parentGroupId = null;
+    } else {
+      // No parent: rows and child groups become top-level
+      group.rowIds.forEach(rowId => {
+        const rowState = filterRowsState.find(r => r && r.id === rowId);
+        if (rowState) {
+          rowState.parentGroupId = null;
+        }
+      });
+
+      group.childGroupIds.forEach(childId => {
+        const childGroup = filterGroups.find(g => g.id === childId);
+        if (childGroup) {
+          childGroup.parentGroupId = null;
+        }
+      });
     }
 
-    // Do NOT move group.rowIds or childGroupIds anywhere else.
-    // This simply makes the group a top-level group.
+    // Finally remove the group itself
+    filterGroups.splice(groupIndex, 1);
+
     rebuildFilterUI();
     updateFetchXmlOutput();
-    showToast('Group ungrouped (detached).', 3000);
+    showToast('Group ungrouped.', 3000);
   }
+
 
 
   document.addEventListener('click', (e) => {
