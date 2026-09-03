@@ -622,10 +622,9 @@ async function getEntityRelationships(entityLogicalName) {
 
   const headers = await getAuthHeaderUsingCrmOrMsal(DATAVERSE_BASE_URL);
 
-  // Retrieve OneToManyRelationships for the entity
   const url = `${DATAVERSE_BASE_URL}/api/data/v9.2/EntityDefinitions(LogicalName='${entityLogicalName}')` +
     `/OneToManyRelationships` +
-    `?$select=SchemaName,ReferencedEntity,ReferencingEntity`;
+    `?$select=SchemaName,ReferencedEntity,ReferencingEntity,ReferencedAttribute,ReferencingAttribute`;
 
   const resp = await fetch(url, {
     headers: {
@@ -641,17 +640,19 @@ async function getEntityRelationships(entityLogicalName) {
 
   const json = await resp.json();
 
-  // We want relationships where this entity is the "1" side (ReferencedEntity == entityLogicalName)
   const rels = json.value
     .filter(r => r.ReferencedEntity && r.ReferencedEntity.toLowerCase() === entityLogicalName.toLowerCase())
     .map(r => ({
       schemaName: r.SchemaName,
-      referencedEntity: r.ReferencedEntity,   // the "1" side (current)
-      referencingEntity: r.ReferencingEntity  // the "N" side (related table)
+      referencedEntity: r.ReferencedEntity,
+      referencingEntity: r.ReferencingEntity,
+      referencedAttribute: r.ReferencedAttribute,   // e.g. accountid
+      referencingAttribute: r.ReferencingAttribute  // e.g. parentaccountid
     }));
 
   return rels;
 }
+
 
 
 // Message handler

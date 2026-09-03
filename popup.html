@@ -11,7 +11,7 @@
       font-size: 12px;
       color: #323130;
       background-color: #ffffff;
-      min-width: 640px;
+      min-width: 750px;
       min-height: 480px;
       margin: 0;
       padding: 12px;
@@ -63,7 +63,13 @@
       box-shadow: 0 0 8px rgba(0, 0, 0, 0.2);
       padding: 12px;
       z-index: 9999;
+
+      /* NEW: resizable */
+      resize: both;
+      overflow: auto;
     }
+
+
 
     #schemaModal.show {
       display: flex;
@@ -256,7 +262,13 @@
       box-shadow: 0 0 8px rgba(0, 0, 0, 0.2);
       padding: 12px;
       z-index: 9999;
+
+      /* NEW: resizable */
+      resize: both;
+      overflow: auto;
     }
+
+
 
     #importModal.show {
       display: flex;
@@ -287,6 +299,17 @@
       padding: 0 4px;
       line-height: 1;
     }
+
+    .relationship-children-container {
+      border: 1px solid #c8c6c4;
+      border-radius: 2px;
+      padding: 4px;
+      margin-top: 4px;
+      margin-left: 24px;
+      /* visually nested */
+      background-color: #faf9f8;
+    }
+
 
     #btnCloseImportX:hover {
       color: #a4262c;
@@ -337,8 +360,14 @@
       padding: 12px;
       z-index: 9999;
       flex-direction: column;
-      overflow-x: auto;
+      overflow: auto;
+
+      /* NEW: resizable */
+      resize: both;
     }
+
+
+
 
     #filterModal.show {
       display: flex;
@@ -376,24 +405,21 @@
     .filter-rows-container {
       border: 1px solid #c8c6c4;
       padding: 6px;
-      max-height: 260px;
+      flex: 1 1 auto;
       overflow-y: auto;
       overflow-x: auto;
-      /* allow horizontal scroll */
-      margin-bottom: 8px;
       white-space: nowrap;
-      /* prevent hard wrapping of content */
     }
-
-
 
     .filter-row {
       display: grid;
-      grid-template-columns: 24px minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr);
+      grid-template-columns: 24px minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+      /* 5 columns now */
       gap: 4px;
       align-items: center;
       margin-bottom: 4px;
     }
+
 
     .filter-row select,
     .filter-row input[type="text"] {

@@ -281,8 +281,16 @@ function escapeXml(str) {
 }
 
 // --- FetchXML filter builder with groups ---
-function buildFetchXmlFilter(filterRowsState, filterGroups) {
-  const activeRows = filterRowsState.filter(r => r && r.enabled && r.fieldLogicalName && r.operationCode);
+// Skips relationship rows
+function buildFetchXmlFilter(filterRowsState, filterGroups, scopePredicate) {
+  const activeRows = filterRowsState.filter(r =>
+    r &&
+    r.enabled &&
+    !r.isRelationship &&
+    r.fieldLogicalName &&
+    r.operationCode &&
+    (!scopePredicate || scopePredicate(r))
+  );
   if (!activeRows.length) return '';
 
   const rowConditions = new Map();
@@ -402,6 +410,29 @@ function buildFetchXmlFilter(filterRowsState, filterGroups) {
   return xmlParts.join('\n');
 }
 
+// Helper: generate unique 4-char alias for relationship rows
+function generateUniqueAlias() {
+  const existingAliases = new Set(
+    (window.filterRowsState || [])
+      .filter(r => r && r.isRelationship && r.relationship && r.relationship.alias)
+      .map(r => r.relationship.alias.toLowerCase())
+  );
+
+  const chars = 'abcdefghijklmnopqrstuvwxyz';
+  const maxAttempts = 500;
+
+  for (let i = 0; i < maxAttempts; i++) {
+    let alias = '';
+    for (let j = 0; j < 4; j++) {
+      alias += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    if (!existingAliases.has(alias.toLowerCase())) {
+      return alias;
+    }
+  }
+
+  return 'rel1';
+}
 
 // --- DOMContentLoaded ---
 document.addEventListener('DOMContentLoaded', async () => {
@@ -455,12 +486,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   let importSchemaContent = null;
 
   window.entityConfigCollection = [];
+  window.entityFilterMap = window.entityFilterMap || {};
 
   let filterRowsState = []; // rows
   let filterGroups = [];    // groups
   let nextRowId = 1;
   let nextGroupId = 1;
   let currentFlyout = null;
+
+  // expose for helper
+  window.filterRowsState = filterRowsState;
 
   await populateEntityList(entityList);
 
@@ -477,6 +512,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     allCustomFieldsCheckbox.checked = false;
     window.currentEntityMetadata = null;
     window.currentFieldMetadataMap = null;
+    // Cache field metadata per entity for filter dropdowns
+    window.fieldMetadataCache = window.fieldMetadataCache || {};
   });
 
   entityInput.addEventListener('change', async () => {
@@ -616,7 +653,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     if (attributes.length === 0) {
-      showToast('No fields selected for this table. Please select at least one field.');
+      showToast('No fields selected for this table. Please select at least one field.', 3000);
       return;
     }
 
@@ -624,11 +661,18 @@ document.addEventListener('DOMContentLoaded', async () => {
       e => e.logicalName !== entityLogicalName
     );
 
+    window.entityFilterMap = window.entityFilterMap || {};
+    const filterXmlText = window.entityFilterMap[entityLogicalName] || '';
+
     window.entityConfigCollection.push({
       logicalName: entityLogicalName,
       disablePlugins,
-      attributes
+      attributes,
+      filterXml: filterXmlText
     });
+
+    // Optional: clear stored filter for this entity after adding
+    // delete window.entityFilterMap[entityLogicalName];
 
     entityInput.value = '';
     attributesGridBody.innerHTML = '';
@@ -644,7 +688,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   btnSaveSchema.addEventListener('click', async () => {
     if (!window.entityConfigCollection || window.entityConfigCollection.length === 0) {
-      showToast('No entities in schema collection. Use Add to collect at least one entity.');
+      showToast('No entities in schema collection. Use Add to collect at least one entity.', 3000);
       return;
     }
 
@@ -796,7 +840,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   btnImportDataStart.addEventListener('click', async () => {
     if (!importTargetUrl || !importDataContent || !importSchemaContent) {
-      showToast('Please select environment, data file, and schema file before importing.');
+      showToast('Please select environment, data file, and schema file before importing.', 3000);
       return;
     }
 
@@ -833,7 +877,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   btnFilterFields.addEventListener('click', async () => {
     const entityLogicalName = entityInput.value;
     if (!entityLogicalName || !window.currentEntityMetadata) {
-      showToast('Please select a table/entity before using Filter.');
+      showToast('Please select a table/entity before using Filter.', 3000);
       return;
     }
 
@@ -847,6 +891,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     nextGroupId = 1;
     closeFlyout();
 
+    window.filterRowsState = filterRowsState;
+
     addFilterRow(entityLogicalName);
   });
 
@@ -858,13 +904,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   btnAddFilterRow.addEventListener('click', () => {
     const entityLogicalName = entityInput.value;
     if (!entityLogicalName || !window.currentEntityMetadata) {
-      showToast('Please select a table/entity before adding filter conditions.');
+      showToast('Please select a table/entity before adding filter conditions.', 3000);
       return;
     }
     addFilterRow(entityLogicalName);
   });
 
-  // GROUP OR - keep state
+  // GROUP OR
   btnGroupOr.addEventListener('click', () => {
     let selectedRows = filterRowsState.filter(r => r && r.selected);
     const selectedGroups = filterGroups.filter(g => g.selected);
@@ -874,19 +920,20 @@ document.addEventListener('DOMContentLoaded', async () => {
       return;
     }
 
-    // NEW: filter out rows that belong to a selected group
     const selectedGroupIds = new Set(selectedGroups.map(g => g.id));
     selectedRows = selectedRows.filter(row => !selectedGroupIds.has(row.parentGroupId));
 
-    // After filtering, ensure we still have enough items
     if (selectedRows.length + selectedGroups.length < 2) {
       showToast('Select at least two rows/groups for GROUP OR.', 3000);
       return;
     }
 
-    console.log('=== GROUP OR BEFORE ===');
-    console.log('Rows:', JSON.stringify(filterRowsState, null, 2));
-    console.log('Groups:', JSON.stringify(filterGroups, null, 2));
+    // Ensure all selected rows are in same scope
+    const scopes = new Set(selectedRows.map(r => r.scope));
+    if (scopes.size > 1) {
+      showToast('Cannot group rows from different scopes (root vs link).', 3000);
+      return;
+    }
 
     const groupId = nextGroupId++;
     const groupName = `OR Group ${groupId}`;
@@ -900,7 +947,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       childGroupIds: []
     };
 
-    // Move selected rows (that are not inside selected groups) into new group
     selectedRows.forEach(row => {
       if (row.parentGroupId) {
         const oldParent = filterGroups.find(g => g.id === row.parentGroupId);
@@ -912,7 +958,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       newGroup.rowIds.push(row.id);
     });
 
-    // Move selected groups into new group
     selectedGroups.forEach(g => {
       if (g.parentGroupId) {
         const oldParent = filterGroups.find(pg => pg.id === g.parentGroupId);
@@ -926,16 +971,16 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     filterGroups.push(newGroup);
 
-    console.log('=== GROUP OR AFTER ===');
-    console.log('Rows:', JSON.stringify(filterRowsState, null, 2));
-    console.log('Groups:', JSON.stringify(filterGroups, null, 2));
+    // Clear selection after grouping
+    filterRowsState.forEach(r => { if (r) r.selected = false; });
+    filterGroups.forEach(g => { g.selected = false; });
 
     rebuildFilterUI();
     updateFetchXmlOutput();
     showToast(`${groupName} created.`, 3000);
   });
 
-
+  // GROUP AND
   btnGroupAnd.addEventListener('click', () => {
     let selectedRows = filterRowsState.filter(r => r && r.selected);
     const selectedGroups = filterGroups.filter(g => g.selected);
@@ -953,9 +998,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       return;
     }
 
-    console.log('=== GROUP AND BEFORE ===');
-    console.log('Rows:', JSON.stringify(filterRowsState, null, 2));
-    console.log('Groups:', JSON.stringify(filterGroups, null, 2));
+    // Ensure all selected rows are in same scope
+    const scopes = new Set(selectedRows.map(r => r.scope));
+    if (scopes.size > 1) {
+      showToast('Cannot group rows from different scopes (root vs link).', 3000);
+      return;
+    }
 
     const groupId = nextGroupId++;
     const groupName = `AND Group ${groupId}`;
@@ -993,9 +1041,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     filterGroups.push(newGroup);
 
-    console.log('=== GROUP AND AFTER ===');
-    console.log('Rows:', JSON.stringify(filterRowsState, null, 2));
-    console.log('Groups:', JSON.stringify(filterGroups, null, 2));
+    // Clear selection after grouping
+    filterRowsState.forEach(r => { if (r) r.selected = false; });
+    filterGroups.forEach(g => { g.selected = false; });
 
     rebuildFilterUI();
     updateFetchXmlOutput();
@@ -1003,36 +1051,45 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   btnApplyFilter.addEventListener('click', () => {
-    const activeRows = filterRowsState.filter(r => r && r.enabled && r.fieldLogicalName);
-    if (!activeRows.length) {
-      showToast('No active field-based filter conditions to apply.', 3000);
-      filterModal.classList.remove('show');
+    const entityLogicalName = entityInput.value;
+    if (!entityLogicalName || !window.currentEntityMetadata) {
+      showToast('Please select a table/entity before applying filter.', 3000);
       return;
     }
 
-    const first = activeRows[0];
-    const logicalName = first.fieldLogicalName;
-    const operationCode = first.operationCode;
-    const value = first.value;
+    const activeRows = filterRowsState.filter(r => r && r.enabled && r.fieldLogicalName);
+    if (!activeRows.length) {
+      showToast('No active field-based filter conditions to apply.', 3000);
+      return;
+    }
 
-    attributeSearch.value = logicalName;
-    const term = attributeSearch.value.toLowerCase();
+    // 1) Capture current textbox value as filter XML for this entity
+    const filterXmlText = fetchXmlOutput.value || '';
+    window.entityFilterMap[entityLogicalName] = filterXmlText;
+    console.log('[ApplyFilter] Stored filter for entity:', entityLogicalName, 'length:', filterXmlText.length);
 
-    Array.from(attributesGridBody.querySelectorAll('tr')).forEach(tr => {
-      const name = tr.dataset.attributeLogicalName.toLowerCase();
-      tr.style.display = name.includes(term) ? '' : 'none';
-    });
+    // 2) Optional existing UI behavior (focus on first field)
+    // const first = activeRows[0];
+    // const logicalName = first.fieldLogicalName;
+    // const operationCode = first.operationCode;
+    // const value = first.value;
+
+    // attributeSearch.value = logicalName;
+    // const term = attributeSearch.value.toLowerCase();
+
+    // Array.from(attributesGridBody.querySelectorAll('tr')).forEach(tr => {
+    //   const name = tr.dataset.attributeLogicalName.toLowerCase();
+    //   tr.style.display = name.includes(term) ? '' : 'none';
+    // });
 
     showToast(
-      `Applied filter on field "${logicalName}"` +
-      (operationCode ? ` with operation "${operationCode}"` : '') +
-      (value ? ` and value "${value}"` : '') +
-      ' (UI only; FetchXML shown in dialog).',
+      `Filter applied for entity "${entityLogicalName}". Filter XML will be included in schema on Add.`,
       4000
     );
 
-    filterModal.classList.remove('show');
+    filterModal.classList.remove('show')
   });
+
 
   btnClearFilter.addEventListener('click', () => {
     attributeSearch.value = '';
@@ -1047,15 +1104,140 @@ document.addEventListener('DOMContentLoaded', async () => {
     closeFlyout();
 
     showToast('Filter cleared.', 3000);
-    filterModal.classList.remove('show');
+
+    // NEW: keep filter dialog open, so DO NOT hide it
+    // Remove or comment out this line:
+    // filterModal.classList.remove('show');
   });
 
   function updateFetchXmlOutput() {
-    const xml = buildFetchXmlFilter(filterRowsState, filterGroups);
-    fetchXmlOutput.value = xml || '';
+    const currentEntityLogicalName = entityInput.value;
+    if (!currentEntityLogicalName) {
+      fetchXmlOutput.value = '';
+      return;
+    }
+
+    // Root filter: scope === 'root'
+    const rootFilterXml = buildFetchXmlFilter(
+      filterRowsState,
+      filterGroups,
+      r => r.scope === 'root'
+    ) || '';
+
+    // All relationship rows (root + nested)
+    const relationshipRows = filterRowsState.filter(r => r && r.isRelationship && r.relationship);
+    if (!relationshipRows.length) {
+      fetchXmlOutput.value = rootFilterXml;
+      return;
+    }
+
+    // Build tree of link-entities
+    const linkRoots = buildLinkEntityTree(relationshipRows);
+
+    const linkEntitiesBlock = linkRoots
+      .map(node => renderLinkEntityNode(node, filterRowsState, filterGroups))
+      .join('\n');
+
+    let rootFilterIndented = '';
+    if (rootFilterXml.trim()) {
+      rootFilterIndented = rootFilterXml
+        .split('\n')
+        .map(line => line ? '    ' + line : line)
+        .join('\n') + '\n';
+    }
+
+    const fullFetch =
+      `<fetch version="1.0"  mapping="logical" distinct="true">
+  <entity name="${escapeXml(currentEntityLogicalName)}">
+${rootFilterIndented}${linkEntitiesBlock}
+  </entity>
+</fetch>`;
+
+    fetchXmlOutput.value = fullFetch;
   }
 
-  function addFilterRow(entityLogicalName, parentGroupId = null) {
+
+  function buildLinkEntityTree(relationshipRows) {
+    const byLinkId = new Map();
+    relationshipRows.forEach(r => {
+      const rel = r.relationship;
+      if (!rel) return;
+      byLinkId.set(rel.linkId, {
+        row: r,
+        children: []
+      });
+    });
+
+    // Attach children to parents
+    relationshipRows.forEach(r => {
+      const rel = r.relationship;
+      if (!rel || rel.parentLinkId == null) return;
+      const parentNode = byLinkId.get(rel.parentLinkId);
+      const node = byLinkId.get(rel.linkId);
+      if (parentNode && node) {
+        parentNode.children.push(node);
+      }
+    });
+
+    // Roots are those with no parentLinkId
+    const roots = [];
+    relationshipRows.forEach(r => {
+      const rel = r.relationship;
+      if (!rel) return;
+      if (rel.parentLinkId == null) {
+        const node = byLinkId.get(rel.linkId);
+        if (node) roots.push(node);
+      }
+    });
+
+    return roots;
+  }
+
+  function renderLinkEntityNode(node, filterRowsState, filterGroups) {
+    const r = node.row;
+    const rel = r.relationship;
+    const linkType = rel.linkType || 'inner';
+    const alias = rel.alias || 'rel';
+    const linkId = rel.linkId;
+
+    // Build filter for this link (scope 'link', linkId)
+    const linkFilterXml = buildFetchXmlFilter(
+      filterRowsState,
+      filterGroups,
+      row => row.scope === 'link' && row.linkId === linkId
+    ) || '';
+
+    let linkFilterIndented = '';
+    if (linkFilterXml.trim()) {
+      linkFilterIndented = linkFilterXml
+        .split('\n')
+        .map(line => line ? '      ' + line : line)
+        .join('\n') + '\n';
+    }
+
+    // Render child link-entities
+    const childLinkXml = node.children.map(childNode => renderLinkEntityNode(childNode, filterRowsState, filterGroups)).join('\n');
+
+    const linkHeader =
+      `    <link-entity name="${escapeXml(rel.referencingEntity)}"
+                 from="${escapeXml(rel.from)}"
+                 to="${escapeXml(rel.to)}"
+                 link-type="${escapeXml(linkType)}"
+                 alias="${escapeXml(alias)}">`;
+
+    const linkFooter = '    </link-entity>';
+
+    if (linkFilterIndented || childLinkXml) {
+      // include filter and/or child links
+      return `${linkHeader}\n${linkFilterIndented}${childLinkXml ? childLinkXml + '\n' : ''}${linkFooter}`;
+    } else {
+      // no filter, no children
+      return `${linkHeader}\n${linkFooter}`;
+    }
+  }
+
+
+  function addFilterRow(entityLogicalName, parentGroupId = null, relatedEntityLogicalName = null, scope = 'root', linkId = null, parentLinkId = null) {
     const rowId = nextRowId++;
     const rowState = {
       id: rowId,
@@ -1065,18 +1247,26 @@ document.addEventListener('DOMContentLoaded', async () => {
       fieldType: null,
       operationCode: null,
       value: '',
-      parentGroupId
+      parentGroupId,
+      isRelationship: false,
+      relationship: null, // { schemaName, referencingEntity, referencedEntity, from, to, alias, linkType, linkId, parentLinkId }
+      relatedEntityLogicalName: relatedEntityLogicalName || entityLogicalName,
+      childRowIds: [],
+      scope,         // 'root' or 'link'
+      linkId,        // id of this link-entity row (if relationship)
+      parentLinkId   // linkId of parent link-entity (for nested relationships)
     };
     filterRowsState.push(rowState);
+    window.filterRowsState = filterRowsState;
 
-    const rowDiv = createRowDom(rowState, entityLogicalName);
+    const rowDiv = createRowDom(rowState, rowState.relatedEntityLogicalName);
 
     if (parentGroupId) {
       const group = filterGroups.find(g => g.id === parentGroupId);
       if (group) {
         group.rowIds.push(rowId);
       }
-      rebuildFilterUI(); // will place row inside the correct group block
+      rebuildFilterUI();
     } else {
       filterRowsContainer.appendChild(rowDiv);
     }
@@ -1085,10 +1275,68 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateFetchXmlOutput();
   }
 
-  // --- IMPORTANT: row DOM creation & restoration ---
+
+  function restoreRowSelectionAndUi(rowState, fieldSelect, opSelect, valueInput, relCell, linkTypeSelect, aliasInput) {
+    // Restore selection for field or relationship
+    if (!rowState.isRelationship && rowState.fieldLogicalName) {
+      const targetValue = `field:${rowState.fieldLogicalName}`;
+      const option = Array.from(fieldSelect.options).find(o => o.value === targetValue);
+      if (option) {
+        fieldSelect.value = targetValue;
+      }
+    } else if (rowState.isRelationship && rowState.relationship) {
+      const targetValue = `related:${rowState.relationship.schemaName}`;
+      const option = Array.from(fieldSelect.options).find(o => o.value === targetValue);
+      if (option) {
+        fieldSelect.value = targetValue;
+      } else {
+        console.warn('[restoreRowSelectionAndUi] Relationship option not found for schemaName:', rowState.relationship.schemaName);
+      }
+    }
+
+    // Restore operations for field rows
+    if (rowState.fieldType && !rowState.isRelationship) {
+      populateOperationsForRow(rowState.fieldType, opSelect, rowState);
+      if (rowState.operationCode) {
+        const opOption = Array.from(opSelect.options).find(o => o.value === rowState.operationCode);
+        if (opOption) {
+          opSelect.value = rowState.operationCode;
+        }
+      }
+    }
+
+    // Restore value
+    valueInput.value = rowState.value || '';
+
+    if (rowState.isRelationship && rowState.relationship) {
+      // Relationship mode
+      opSelect.innerHTML = '';
+      opSelect.style.display = 'none';
+      valueInput.style.display = 'none';
+
+      relCell.style.display = '';
+      linkTypeSelect.value = rowState.relationship.linkType || 'inner';
+      aliasInput.value = rowState.relationship.alias || '';
+    } else {
+      // Normal field mode
+      opSelect.style.display = '';
+      relCell.style.display = 'none';
+      applyValueVisibility(rowState, opSelect, valueInput);
+
+      // Only auto-select for brand new, non-relationship rows
+      if (!rowState.fieldLogicalName && !rowState.isRelationship && fieldSelect.options.length > 0) {
+        const opt = fieldSelect.options[0];
+        fieldSelect.value = opt.value;
+        fieldSelect.dispatchEvent(new Event('change'));
+      }
+    }
+  }
+
+
+  // --- Row DOM creation & restoration ---
   function createRowDom(rowState, entityLogicalName) {
     let rowDiv = filterRowsContainer.querySelector(`.filter-row[data-row-id="${rowState.id}"]`);
-    let fieldSelect, opSelect, valueInput, headerBtn;
+    let fieldSelect, opSelect, valueInput, headerBtn, relCell, linkTypeSelect, aliasInput;
 
     if (!rowDiv) {
       rowDiv = document.createElement('div');
@@ -1114,10 +1362,34 @@ document.addEventListener('DOMContentLoaded', async () => {
       valueInput.type = 'text';
       valueCell.appendChild(valueInput);
 
+      // Relationship controls cell
+      relCell = document.createElement('div');
+      relCell.className = 'filter-row-rel-controls';
+
+      linkTypeSelect = document.createElement('select');
+      linkTypeSelect.className = 'link-type-select';
+      ['inner', 'outer'].forEach(type => {
+        const opt = document.createElement('option');
+        opt.value = type;
+        opt.textContent = type;
+        linkTypeSelect.appendChild(opt);
+      });
+      relCell.appendChild(linkTypeSelect);
+
+      aliasInput = document.createElement('input');
+      aliasInput.type = 'text';
+      aliasInput.className = 'alias-input';
+      aliasInput.placeholder = 'alias';
+      relCell.appendChild(aliasInput);
+
+      // hide relationship controls by default
+      relCell.style.display = 'none';
+
       rowDiv.appendChild(headerCell);
       rowDiv.appendChild(fieldCell);
       rowDiv.appendChild(opCell);
       rowDiv.appendChild(valueCell);
+      rowDiv.appendChild(relCell);
 
       headerBtn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -1129,28 +1401,96 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!opt) {
           rowState.fieldLogicalName = null;
           rowState.fieldType = null;
+          rowState.isRelationship = false;
+          rowState.relationship = null;
           opSelect.innerHTML = '';
+          opSelect.style.display = '';
+          valueInput.style.display = '';
           rowState.operationCode = null;
           updateFetchXmlOutput();
           return;
         }
 
         const value = opt.value;
+
         if (value.startsWith('field:')) {
           const logicalName = value.substring('field:'.length);
           const type = opt.dataset.fieldType || 'string';
 
           rowState.fieldLogicalName = logicalName;
           rowState.fieldType = type;
+          rowState.isRelationship = false;
+          rowState.relationship = null;
+
+          // show op/value controls
+          opSelect.style.display = '';
+          valueInput.style.display = '';
+
+          // hide relationship controls
+          relCell.style.display = 'none';
 
           populateOperationsForRow(type, opSelect, rowState);
           applyValueVisibility(rowState, opSelect, valueInput);
-        } else if (value.startsWith('related:')) {
+        }
+        else if (value.startsWith('related:')) {
+          // Relationship mode
           rowState.fieldLogicalName = null;
           rowState.fieldType = null;
+          rowState.isRelationship = true;
+
+          const schemaName = value.substring('related:'.length);
+          const referencingEntity = opt.dataset.referencingEntity;
+          const referencedEntity = opt.dataset.referencedEntity;
+          const from = opt.dataset.referencingAttribute;
+          const to = opt.dataset.referencedAttribute;
+
+          const linkType = 'inner';
+          const alias = generateUniqueAlias();
+
+          const thisLinkId = rowState.id;
+          const parentLinkId = rowState.scope === 'link' ? rowState.linkId : null;
+
+          // Do NOT overwrite relatedEntityLogicalName if this row already has one
+          if (!rowState.relatedEntityLogicalName) {
+            rowState.relatedEntityLogicalName = referencingEntity;
+          }
+
+          if (!rowState.childRowIds) {
+            rowState.childRowIds = [];
+          }
+
+          rowState.relationship = {
+            schemaName,
+            referencingEntity,
+            referencedEntity,
+            from,
+            to,
+            alias,
+            linkType,
+            linkId: thisLinkId,
+            parentLinkId: parentLinkId
+          };
+
+          if (rowState.scope === 'root') {
+            rowState.linkId = thisLinkId;
+            rowState.parentLinkId = null;
+          } else {
+            rowState.linkId = thisLinkId;
+            rowState.parentLinkId = parentLinkId;
+          }
+
+          // hide op/value controls
           opSelect.innerHTML = '';
+          opSelect.style.display = 'none';
+          valueInput.value = '';
+          valueInput.style.display = 'none';
           rowState.operationCode = null;
-          valueInput.style.display = '';
+          rowState.value = '';
+
+          // show relationship controls
+          relCell.style.display = '';
+          linkTypeSelect.value = linkType;
+          aliasInput.value = alias;
         }
 
         updateFetchXmlOutput();
@@ -1168,65 +1508,138 @@ document.addEventListener('DOMContentLoaded', async () => {
         updateFetchXmlOutput();
       });
 
+      linkTypeSelect.addEventListener('change', () => {
+        if (rowState.isRelationship && rowState.relationship) {
+          rowState.relationship.linkType = linkTypeSelect.value;
+          updateFetchXmlOutput();
+        }
+      });
+
+      aliasInput.addEventListener('blur', () => {
+        if (!rowState.isRelationship || !rowState.relationship) return;
+
+        const newAlias = aliasInput.value.trim();
+        if (!newAlias) {
+          showToast('Alias cannot be empty.', 3000);
+          aliasInput.value = rowState.relationship.alias || '';
+          return;
+        }
+
+        const isDuplicate = filterRowsState.some(r =>
+          r &&
+          r.isRelationship &&
+          r.relationship &&
+          r.relationship.alias &&
+          r.relationship.alias.toLowerCase() === newAlias.toLowerCase() &&
+          r.id !== rowState.id
+        );
+
+        if (isDuplicate) {
+          showToast('Alias must be unique.', 3000);
+          aliasInput.value = rowState.relationship.alias || '';
+          return;
+        }
+
+        rowState.relationship.alias = newAlias;
+        updateFetchXmlOutput();
+      });
+
     } else {
-      fieldSelect = rowDiv.querySelector('select:nth-of-type(1)');
-      opSelect = rowDiv.querySelector('select:nth-of-type(2)');
-      valueInput = rowDiv.querySelector('input[type="text"]');
-      headerBtn = rowDiv.querySelector('.filter-row-header button');
+      // restore references
+      const headerCell = rowDiv.querySelector('.filter-row-header');
+      headerBtn = headerCell.querySelector('button');
+
+      const cells = rowDiv.querySelectorAll('div');
+      fieldSelect = cells[1].querySelector('select');
+      opSelect = cells[2].querySelector('select');
+      valueInput = cells[3].querySelector('input[type="text"]');
+      relCell = rowDiv.querySelector('.filter-row-rel-controls');
+      linkTypeSelect = relCell.querySelector('.link-type-select');
+      aliasInput = relCell.querySelector('.alias-input');
     }
 
-    // Re-populate field dropdown and then restore selection
-    populateFieldDropdownForRow(entityLogicalName, fieldSelect).then(() => {
-      if (rowState.fieldLogicalName) {
-        const targetValue = `field:${rowState.fieldLogicalName}`;
-        const option = Array.from(fieldSelect.options).find(o => o.value === targetValue);
-        if (option) {
-          fieldSelect.value = targetValue;
-        }
-      }
+    // Re-populate field dropdown and restore selection
+    console.log('[createRowDom] rowId:', rowState.id, 'relatedEntityLogicalName:', rowState.relatedEntityLogicalName, 'entityLogicalName:', entityLogicalName);
+    const dropdownEntity = rowState.relatedEntityLogicalName || entityLogicalName;
+    console.log('[createRowDom] rowId:', rowState.id, 'using dropdownEntity:', dropdownEntity);
 
-      // Re-populate operations if we know the type
-      if (rowState.fieldType) {
-        populateOperationsForRow(rowState.fieldType, opSelect, rowState);
-
-        if (rowState.operationCode) {
-          const opOption = Array.from(opSelect.options).find(o => o.value === rowState.operationCode);
-          if (opOption) {
-            opSelect.value = rowState.operationCode;
-          }
-        }
-      }
-
-      // Restore value
-      valueInput.value = rowState.value || '';
-
-      applyValueVisibility(rowState, opSelect, valueInput);
-
-      // For brand-new rows (no fieldLogicalName yet), set default selection once
-      if (!rowState.fieldLogicalName && fieldSelect.options.length > 0) {
-        const opt = fieldSelect.options[0];
-        fieldSelect.value = opt.value;
-        fieldSelect.dispatchEvent(new Event('change'));
-      }
+    populateFieldDropdownForRow(dropdownEntity, fieldSelect).then(() => {
+      console.log('[createRowDom] Populated dropdown for rowId:', rowState.id);
+      restoreRowSelectionAndUi(rowState, fieldSelect, opSelect, valueInput, relCell, linkTypeSelect, aliasInput);
     });
+
+
+
+
+    // NEW: if this is a relationship row, render its child rows underneath
+    if (rowState.isRelationship && Array.isArray(rowState.childRowIds) && rowState.childRowIds.length > 0) {
+      let childrenContainer = rowDiv.querySelector('.relationship-children-container');
+      if (!childrenContainer) {
+        childrenContainer = document.createElement('div');
+        childrenContainer.className = 'relationship-children-container';
+        childrenContainer.style.marginLeft = '20px';
+        rowDiv.appendChild(childrenContainer);
+      } else {
+        childrenContainer.innerHTML = ''; // important
+      }
+
+      rowState.childRowIds.forEach(childId => {
+        const childState = filterRowsState.find(r => r && r.id === childId);
+        if (!childState) return;
+        const childDiv = createRowDom(childState, childState.relatedEntityLogicalName || rowState.relatedEntityLogicalName);
+        childrenContainer.appendChild(childDiv);
+      });
+    }
+
 
     return rowDiv;
   }
 
-  // --- field dropdown population: no auto-change at end ---
+  // --- field dropdown population ---
   async function populateFieldDropdownForRow(entityLogicalName, fieldSelect) {
+    console.log('[populateFieldDropdownForRow] entity:', entityLogicalName);
+
+    // Clear before adding anything
     fieldSelect.innerHTML = '';
 
-    const fieldMetadataMap = window.currentFieldMetadataMap || {};
+    window.fieldMetadataCache = window.fieldMetadataCache || {};
+    let fieldMetadataMap = window.fieldMetadataCache[entityLogicalName];
+
+    if (!fieldMetadataMap) {
+      console.log('[populateFieldDropdownForRow] fetching metadata for entity:', entityLogicalName);
+      const fieldMetadata = await sendToBackground({
+        type: 'GET_FIELD_METADATA',
+        entityLogicalName
+      });
+
+      if (!fieldMetadata || !Array.isArray(fieldMetadata) || fieldMetadata.length === 0) {
+        console.warn('[populateFieldDropdownForRow] No field metadata returned for entity:', entityLogicalName);
+        return; // IMPORTANT: we haven't cleared the dropdown yet
+      }
+
+      fieldMetadataMap = {};
+      fieldMetadata.forEach(f => {
+        fieldMetadataMap[f.logicalName] = f;
+      });
+      window.fieldMetadataCache[entityLogicalName] = fieldMetadataMap;
+    } else {
+      console.log('[populateFieldDropdownForRow] using cached metadata for entity:', entityLogicalName);
+    }
+
+    // Now we are sure we have metadata → clear and rebuild
+    fieldSelect.innerHTML = '';
+
     const fieldsOptGroup = document.createElement('optgroup');
     fieldsOptGroup.label = 'Fields';
 
-    Array.from(attributesGridBody.querySelectorAll('tr')).forEach(tr => {
-      const logicalName = tr.dataset.attributeLogicalName;
-      const displayNameTd = tr.querySelector('.col-displayname');
-      const displayName = displayNameTd ? displayNameTd.textContent : logicalName;
+    const fieldKeys = Object.keys(fieldMetadataMap);
+    if (!fieldKeys.length) {
+      console.warn('[populateFieldDropdownForRow] fieldMetadataMap empty for entity:', entityLogicalName);
+    }
 
+    fieldKeys.forEach(logicalName => {
       const meta = fieldMetadataMap[logicalName] || {};
+      const displayName = meta.displayName || logicalName;
       const type = meta.type || 'string';
 
       const opt = document.createElement('option');
@@ -1250,8 +1663,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         relationships.forEach(rel => {
           const opt = document.createElement('option');
-          opt.value = `related:${rel.referencingEntity}`;
+          opt.value = `related:${rel.schemaName}`;
           opt.textContent = `${rel.referencingEntity} (via ${rel.schemaName})`;
+
+          opt.dataset.referencingEntity = rel.referencingEntity;
+          opt.dataset.referencedEntity = rel.referencedEntity;
+          opt.dataset.referencingAttribute = rel.referencingAttribute;
+          opt.dataset.referencedAttribute = rel.referencedAttribute;
+
           relatedOptGroup.appendChild(opt);
         });
 
@@ -1261,11 +1680,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       console.error('Error populating relationships for filter row', err);
     }
 
-    // IMPORTANT: do not auto-select or fire 'change' here.
-    // createRowDom handles default selection for new rows.
+    console.log('[populateFieldDropdownForRow] options count:', fieldSelect.options.length);
   }
 
-  // --- operations: only default if new row ---
+
+
+
+
   function populateOperationsForRow(fieldType, opSelect, rowState) {
     const opsCodes = FIELD_TYPE_TO_OPERATIONS[fieldType] || [];
 
@@ -1304,7 +1725,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       opSelect.appendChild(opt);
     });
 
-    // Only set default if operationCode is not yet defined (new row)
     if (!rowState.operationCode && opSelect.options.length > 0) {
       opSelect.selectedIndex = 0;
       rowState.operationCode = opSelect.value;
@@ -1346,15 +1766,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const currentEntityLogicalName = entityInput.value;
 
-    // Standalone rows (no group)
     filterRowsState
-      .filter(r => r && !r.parentGroupId)
+      .filter(r => r && !r.parentGroupId && r.scope === 'root')
       .forEach(rowState => {
         const rowDiv = createRowDom(rowState, currentEntityLogicalName);
         filterRowsContainer.appendChild(rowDiv);
       });
 
-    // Top-level groups (no parentGroupId)
     const topLevelGroups = filterGroups.filter(g => !g.parentGroupId);
     topLevelGroups.forEach(groupState => {
       const groupDiv = createGroupDom(groupState, currentEntityLogicalName);
@@ -1387,7 +1805,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     rowsContainer.className = 'group-rows-container';
     groupDiv.appendChild(rowsContainer);
 
-    // This group's rows
     groupState.rowIds.forEach(rowId => {
       const rowState = filterRowsState.find(r => r && r.id === rowId);
       if (!rowState) return;
@@ -1395,7 +1812,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       rowsContainer.appendChild(rowDiv);
     });
 
-    // This group's child groups
     groupState.childGroupIds.forEach(childGroupId => {
       const childGroupState = filterGroups.find(g => g.id === childGroupId);
       if (!childGroupState) return;
@@ -1410,9 +1826,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     return groupDiv;
   }
-
-
-
 
   function updateIndentAndSelection() {
     const groupMap = new Map();
@@ -1451,7 +1864,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       rowDiv.style.backgroundColor = rowState.selected ? '#edebe9' : '';
 
-      // Hide row arrow when inside a group
       const headerCell = rowDiv.querySelector('.filter-row-header');
       if (headerCell) {
         headerCell.style.display = rowState.parentGroupId ? 'none' : '';
@@ -1491,14 +1903,58 @@ document.addEventListener('DOMContentLoaded', async () => {
     const flyout = document.createElement('div');
     flyout.className = 'flyout';
 
-    const btnSelect = document.createElement('button');
-    // Dynamic label based on current selection state
-    btnSelect.textContent = rowState.selected ? 'Unselect Row' : 'Select Row';
-    btnSelect.addEventListener('click', () => {
-      rowState.selected = !rowState.selected;
-      updateIndentAndSelection();
-      closeFlyout();
-    });
+    // Only show select/unselect for non-relationship rows
+    if (!rowState.isRelationship) {
+      const btnSelect = document.createElement('button');
+      btnSelect.textContent = rowState.selected ? 'Unselect Row' : 'Select Row';
+      btnSelect.addEventListener('click', () => {
+        rowState.selected = !rowState.selected;
+        updateIndentAndSelection();
+        closeFlyout();
+      });
+      flyout.appendChild(btnSelect);
+    }
+
+    // NEW: Add Criteria for relationship rows
+    if (rowState.isRelationship && rowState.relationship) {
+      const btnAddCriteria = document.createElement('button');
+      btnAddCriteria.textContent = 'Add Criteria';
+      btnAddCriteria.addEventListener('click', () => {
+        const relatedEntityLogicalName = rowState.relationship.referencingEntity;
+        console.log('[AddCriteria] Parent relationship rowState:', JSON.stringify(rowState, null, 2));
+        console.log('[AddCriteria] Related entity for criteria:', relatedEntityLogicalName);
+
+        if (!relatedEntityLogicalName) {
+          showToast('No related entity found for this relationship.', 3000);
+          return;
+        }
+
+        const parentLinkId = rowState.relationship.linkId;
+
+        addFilterRow(
+          relatedEntityLogicalName,      // entityLogicalName
+          null,                          // parentGroupId
+          relatedEntityLogicalName,      // relatedEntityLogicalName
+          'link',                        // scope
+          parentLinkId,                  // linkId
+          parentLinkId                   // parentLinkId
+        );
+
+        const newRow = filterRowsState[filterRowsState.length - 1];
+        console.log('[AddCriteria] New child rowState:', JSON.stringify(newRow, null, 2));
+
+        if (!rowState.childRowIds) rowState.childRowIds = [];
+        rowState.childRowIds.push(newRow.id);
+
+        rebuildFilterUI();
+        updateFetchXmlOutput();
+        closeFlyout();
+      });
+      flyout.appendChild(btnAddCriteria);
+    }
+
+
+
 
     const btnDelete = document.createElement('button');
     btnDelete.textContent = 'Delete';
@@ -1507,7 +1963,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       closeFlyout();
     });
 
-    flyout.appendChild(btnSelect);
     flyout.appendChild(btnDelete);
 
     document.body.appendChild(flyout);
@@ -1526,7 +1981,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     flyout.className = 'flyout';
 
     const btnSelect = document.createElement('button');
-    // Dynamic label based on current selection state
     btnSelect.textContent = groupState.selected ? 'Unselect Group' : 'Select Group';
     btnSelect.addEventListener('click', () => {
       groupState.selected = !groupState.selected;
@@ -1582,7 +2036,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     currentFlyout = flyout;
   }
 
-
   function deleteRow(rowId) {
     const rowIndex = filterRowsState.findIndex(r => r && r.id === rowId);
     if (rowIndex === -1) return;
@@ -1616,28 +2069,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (groupIndex === -1) return;
 
     const group = filterGroups[groupIndex];
-
-    // Remember parent before we remove this group
     const parentGroupId = group.parentGroupId;
 
     if (parentGroupId) {
-      // Attach this group's rows and child groups to its parent
       const parent = filterGroups.find(g => g.id === parentGroupId);
       if (parent) {
-        // Move rows up
         group.rowIds.forEach(rowId => {
-          // Update row state
           const rowState = filterRowsState.find(r => r && r.id === rowId);
           if (rowState) {
             rowState.parentGroupId = parentGroupId;
           }
-          // Attach to parent group
           if (!parent.rowIds.includes(rowId)) {
             parent.rowIds.push(rowId);
           }
         });
 
-        // Move child groups up
         group.childGroupIds.forEach(childId => {
           const childGroup = filterGroups.find(g => g.id === childId);
           if (childGroup) {
@@ -1648,11 +2094,9 @@ document.addEventListener('DOMContentLoaded', async () => {
           }
         });
 
-        // Remove this group from parent's childGroupIds
         parent.childGroupIds = parent.childGroupIds.filter(id => id !== groupId);
       }
     } else {
-      // No parent: rows and child groups become top-level
       group.rowIds.forEach(rowId => {
         const rowState = filterRowsState.find(r => r && r.id === rowId);
         if (rowState) {
@@ -1668,15 +2112,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
     }
 
-    // Finally remove the group itself
     filterGroups.splice(groupIndex, 1);
-
     rebuildFilterUI();
     updateFetchXmlOutput();
     showToast('Group ungrouped.', 3000);
   }
-
-
 
   document.addEventListener('click', (e) => {
     if (currentFlyout && !currentFlyout.contains(e.target)) {
@@ -1805,7 +2245,7 @@ function buildAttributesGrid(tbody, attributes, selectAllFieldsCheckbox, fieldMe
   selectAllFieldsCheckbox.checked = false;
 }
 
-function buildEntityXmlFragment(entityLogicalName, attributes, disablePlugins, entityMetadata, fieldMetadataMap) {
+function buildEntityXmlFragment(entityLogicalName, attributes, disablePlugins, entityMetadata, fieldMetadataMap, filterXml) {
   const esc = (s) => {
     if (s === null || s === undefined) return '';
     const str = String(s);
@@ -1821,6 +2261,8 @@ function buildEntityXmlFragment(entityLogicalName, attributes, disablePlugins, e
   const primaryNameField = entityMetadata.primaryName || 'name';
   const displayName = entityMetadata.displayName || entityLogicalName;
   const etc = entityMetadata.objectTypeCode || '';
+  const filterXmlText = filterXml || '';
+
 
   let xml = '';
   xml += `  <entity name="${esc(entityLogicalName)}" displayname="${esc(displayName)}" etc="${esc(etc)}" primaryidfield="${esc(primaryIdField)}" primarynamefield="${esc(primaryNameField)}" disableplugins="${disablePlugins}">\n`;
@@ -1851,6 +2293,13 @@ function buildEntityXmlFragment(entityLogicalName, attributes, disablePlugins, e
 
   xml += `    </fields>\n`;
   xml += `    <relationships />\n`;
+
+  // NEW: filter element after relationships, with escaped content
+  if (filterXmlText && filterXmlText.trim()) {
+    const escapedFilter = escapeXml(filterXmlText);
+    xml += `    <filter>${escapedFilter}</filter>\n`;
+  }
+
   xml += `  </entity>\n`;
 
   return xml;
@@ -1879,7 +2328,14 @@ async function buildFullSchemaXmlFromCollection(entityConfigCollection) {
       fieldMetadataMap[f.logicalName] = f;
     });
 
-    xml += buildEntityXmlFragment(entityLogicalName, attributes, disablePlugins, entityMetadata, fieldMetadataMap);
+    xml += buildEntityXmlFragment(
+      entityLogicalName,
+      attributes,
+      disablePlugins,
+      entityMetadata,
+      fieldMetadataMap,
+      config.filterXml
+    );
   }
 
   xml += `</entities>\n`;
