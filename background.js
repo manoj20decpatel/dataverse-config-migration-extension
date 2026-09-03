@@ -613,6 +613,47 @@ async function getEnvironmentsFromOpenTabs() {
   return envs;
 }
 
+// 1:N relationships where the selected entity is the "1" side
+async function getEntityRelationships(entityLogicalName) {
+  if (!DATAVERSE_BASE_URL) {
+    console.warn('GET_ENTITY_RELATIONSHIPS: DATAVERSE_BASE_URL not set');
+    return [];
+  }
+
+  const headers = await getAuthHeaderUsingCrmOrMsal(DATAVERSE_BASE_URL);
+
+  // Retrieve OneToManyRelationships for the entity
+  const url = `${DATAVERSE_BASE_URL}/api/data/v9.2/EntityDefinitions(LogicalName='${entityLogicalName}')` +
+    `/OneToManyRelationships` +
+    `?$select=SchemaName,ReferencedEntity,ReferencingEntity`;
+
+  const resp = await fetch(url, {
+    headers: {
+      ...headers,
+      'Accept': 'application/json'
+    }
+  });
+
+  if (!resp.ok) {
+    console.error('GET_ENTITY_RELATIONSHIPS error', resp.status, await resp.text());
+    return [];
+  }
+
+  const json = await resp.json();
+
+  // We want relationships where this entity is the "1" side (ReferencedEntity == entityLogicalName)
+  const rels = json.value
+    .filter(r => r.ReferencedEntity && r.ReferencedEntity.toLowerCase() === entityLogicalName.toLowerCase())
+    .map(r => ({
+      schemaName: r.SchemaName,
+      referencedEntity: r.ReferencedEntity,   // the "1" side (current)
+      referencingEntity: r.ReferencingEntity  // the "N" side (related table)
+    }));
+
+  return rels;
+}
+
+
 // Message handler
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
@@ -661,7 +702,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const envs = await getEnvironmentsFromOpenTabs();
           sendResponse(envs);
           break;
-
+        case 'GET_ENTITY_RELATIONSHIPS':
+          sendResponse(await getEntityRelationships(message.entityLogicalName));
+          break;
         default:
           sendResponse({ error: 'Unknown message type' });
       }

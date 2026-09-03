@@ -109,7 +109,6 @@
       margin-bottom: 2px;
     }
 
-    /* Editable dropdown (input + datalist) */
     #entityInput {
       width: 260px;
       padding: 2px 4px;
@@ -119,7 +118,6 @@
       background-color: #ffffff;
     }
 
-    /* Search textbox matches width of entity input */
     #attributeSearch {
       width: 260px;
       padding: 2px 4px;
@@ -141,6 +139,13 @@
       display: flex;
       gap: 8px;
       justify-content: flex-end;
+    }
+
+    .schema-filter-toolbar {
+      margin-bottom: 4px;
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
     }
 
     .grid-container {
@@ -210,6 +215,11 @@
       text-align: center;
     }
 
+    .col-select input[type="checkbox"] {
+      margin: 0;
+      display: inline-block;
+    }
+
     .col-attribute {
       width: 22%;
     }
@@ -236,7 +246,6 @@
     /* Import Modal */
     #importModal {
       display: none;
-      /* hidden by default */
       position: fixed;
       top: 10%;
       left: 10%;
@@ -313,6 +322,195 @@
       display: flex;
       justify-content: flex-end;
       gap: 8px;
+    }
+
+    /* Filter Modal */
+    #filterModal {
+      display: none;
+      position: fixed;
+      top: 18%;
+      left: 18%;
+      width: 64%;
+      background: #ffffff;
+      border: 1px solid #c8c6c4;
+      box-shadow: 0 0 8px rgba(0, 0, 0, 0.2);
+      padding: 12px;
+      z-index: 9999;
+      flex-direction: column;
+      overflow-x: auto;
+    }
+
+    #filterModal.show {
+      display: flex;
+    }
+
+    .filter-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+
+    .filter-header h4 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 600;
+      color: #201f1e;
+    }
+
+    #btnCloseFilterX {
+      border: none;
+      background: transparent;
+      color: #201f1e;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+      padding: 0 4px;
+      line-height: 1;
+    }
+
+    #btnCloseFilterX:hover {
+      color: #a4262c;
+    }
+
+    .filter-rows-container {
+      border: 1px solid #c8c6c4;
+      padding: 6px;
+      max-height: 260px;
+      overflow-y: auto;
+      overflow-x: auto;
+      /* allow horizontal scroll */
+      margin-bottom: 8px;
+      white-space: nowrap;
+      /* prevent hard wrapping of content */
+    }
+
+
+
+    .filter-row {
+      display: grid;
+      grid-template-columns: 24px minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr);
+      gap: 4px;
+      align-items: center;
+      margin-bottom: 4px;
+    }
+
+    .filter-row select,
+    .filter-row input[type="text"] {
+      width: 100%;
+      min-width: 0;
+      padding: 2px 4px;
+      border: 1px solid #c8c6c4;
+      border-radius: 2px;
+      font-size: 12px;
+      box-sizing: border-box;
+    }
+
+    .filter-row-header {
+      text-align: center;
+    }
+
+    .filter-row-header button {
+      padding: 2px 4px;
+      font-size: 11px;
+    }
+
+    .filter-row-actions {
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: flex-start;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .filter-row-actions label {
+      font-size: 11px;
+      color: #605e5c;
+    }
+
+    .filter-actions {
+      margin-top: 8px;
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .filter-section {
+      margin-bottom: 8px;
+    }
+
+    /* Group visual styles */
+    .group-block {
+      border: 1px solid #c8c6c4;
+      border-radius: 2px;
+      padding: 4px;
+      margin-bottom: 4px;
+      background-color: #faf9f8;
+      position: relative;
+    }
+
+    .group-block.selected {
+      border-color: #605e5c;
+      background-color: #edebe9;
+    }
+
+    .group-header-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 4px;
+      font-size: 11px;
+      color: #605e5c;
+    }
+
+    .group-header-row button {
+      margin-right: 6px;
+      font-size: 11px;
+      padding: 2px 6px;
+    }
+
+    .group-header-label {
+      font-weight: 600;
+    }
+
+    .group-rows-container {
+      /* contains individual filter-row divs and nested groups */
+    }
+
+    /* Flyout */
+    .flyout {
+      position: absolute;
+      background: #ffffff;
+      border: 1px solid #c8c6c4;
+      box-shadow: 0 0 4px rgba(0, 0, 0, 0.2);
+      padding: 4px;
+      font-size: 11px;
+      z-index: 10001;
+    }
+
+    .flyout button {
+      width: 100%;
+      text-align: left;
+      padding: 2px 6px;
+      margin: 2px 0;
+      font-size: 11px;
+    }
+
+    .flyout button:hover {
+      background-color: #edebe9;
+    }
+
+    /* Indentation for groups (for nested groups / rows) */
+    .indent-level-0 {
+      margin-left: 0;
+    }
+
+    .indent-level-1 {
+      margin-left: 16px;
+    }
+
+    .indent-level-2 {
+      margin-left: 32px;
     }
 
     /* Toasts */
@@ -397,6 +595,10 @@
       </button>
     </div>
 
+    <div class="schema-filter-toolbar">
+      <button id="btnFilterFields">Filter</button>
+    </div>
+
     <div class="grid-container">
       <div class="grid-header">
         <table>
@@ -416,10 +618,37 @@
       </div>
       <div class="grid-body">
         <table>
-          <tbody id="attributesGridBody">
-          </tbody>
+          <tbody id="attributesGridBody"></tbody>
         </table>
       </div>
+    </div>
+  </div>
+
+  <!-- Filter Modal -->
+  <div id="filterModal">
+    <div class="filter-header">
+      <h4>Filter</h4>
+      <button id="btnCloseFilterX" aria-label="Close filter dialog">×</button>
+    </div>
+
+    <div id="filterRowsContainer" class="filter-rows-container"></div>
+
+    <div class="filter-row-actions">
+      <button id="btnAddFilterRow">Add Condition</button>
+      <button id="btnGroupOr">GROUP OR</button>
+      <button id="btnGroupAnd">Group AND</button>
+      <label>Use flyout to select rows/groups, then group.</label>
+    </div>
+
+    <div class="filter-section">
+      <label for="fetchXmlOutput">Generated FetchXML Filter</label><br>
+      <textarea id="fetchXmlOutput" readonly
+        style="width:100%; height:120px; padding:4px; border:1px solid #c8c6c4; border-radius:2px; font-size:11px; font-family:Consolas, monospace;"></textarea>
+    </div>
+
+    <div class="filter-actions">
+      <button id="btnApplyFilter">Apply</button>
+      <button id="btnClearFilter">Clear</button>
     </div>
   </div>
 
@@ -432,9 +661,7 @@
 
     <div class="import-section">
       <label>Target Environment</label>
-      <div id="envRadioList" class="env-radio-list">
-        <!-- Radio buttons injected here -->
-      </div>
+      <div id="envRadioList" class="env-radio-list"></div>
       <div id="manualEnvContainer" style="margin-top:4px; display:none;">
         <label for="manualEnvUrl">Environment URL</label>
         <input type="text" id="manualEnvUrl" placeholder="https://org.crm.dynamics.com">
@@ -456,10 +683,8 @@
     </div>
   </div>
 
-  <!-- Toast container -->
   <div id="toastContainer"></div>
 
-  <!-- Old hidden file inputs (still used by export data) -->
   <input type="file" id="schemaFileInput" accept=".xml" style="display:none;">
   <input type="file" id="dataFileInput" accept=".json" style="display:none;">
 
