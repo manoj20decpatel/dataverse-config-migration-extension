@@ -295,20 +295,61 @@ function buildFetchXmlFilter(filterRowsState, filterGroups, scopePredicate) {
 
   const rowConditions = new Map();
   activeRows.forEach(row => {
-    const attribute = row.fieldLogicalName;
+    let attribute = row.fieldLogicalName;  // IMPORTANT: let, not const
     const rawValue = (row.value || '').trim();
     const type = row.fieldType || 'string';
 
     let operator;
     let valueAttr = null;
 
-    if (type === 'string' || type === 'optionsetvalue') {
+    if (type === 'string') {
       const meta = getStringLikeOperationMeta(row.operationCode);
       if (!meta) return;
       operator = meta.fetchop || meta.code;
       if (meta.fetchval !== null) {
         valueAttr = meta.fetchval.replace('{0}', rawValue);
       }
+    } else if (type === 'optionsetvalue') {
+      const meta = getStringLikeOperationMeta(row.operationCode);
+      if (!meta) return;
+
+      operator = meta.fetchop || meta.code;
+
+      // Decide attribute name:
+      // - eq/ne => use logical name (numeric value)
+      // - string-like => use logicalName + "name"
+      let attributeNameForFetch = attribute;
+
+      const isStringLikeOp =
+        row.operationCode === 'contains' ||
+        row.operationCode === 'doesnotcontain' ||
+        row.operationCode === 'beginswith' ||
+        row.operationCode === 'doesnotbeginwith' ||
+        row.operationCode === 'endswith' ||
+        row.operationCode === 'doesnotendwith';
+
+      if (isStringLikeOp) {
+        attributeNameForFetch = attribute + 'name';
+      }
+
+      if (row.operationCode === 'eq' || row.operationCode === 'ne') {
+        const numericVal = row.optionSetSelectedValue != null
+          ? row.optionSetSelectedValue
+          : (rawValue ? parseInt(rawValue, 10) : null);
+
+        if (numericVal == null || Number.isNaN(numericVal)) {
+          // no valid value => skip this condition
+          return;
+        }
+        valueAttr = String(numericVal);
+      } else {
+        if (meta.fetchval !== null) {
+          valueAttr = meta.fetchval.replace('{0}', rawValue);
+        }
+      }
+
+      // Override attribute for this condition
+      attribute = attributeNameForFetch;
     } else if (type === 'memo') {
       const meta = getMemoOperationMeta(row.operationCode);
       if (!meta) return;
@@ -341,10 +382,39 @@ function buildFetchXmlFilter(filterRowsState, filterGroups, scopePredicate) {
       const meta = getBoolOperationMeta(row.operationCode);
       if (!meta) return;
       operator = meta.fetchop || meta.code;
-      if (meta.fetchval !== null) {
-        valueAttr = meta.fetchval.replace('{0}', rawValue);
+
+      let attributeNameForFetch = attribute;
+
+      const isStringLikeOp =
+        row.operationCode === 'contains' ||
+        row.operationCode === 'doesnotcontain' ||
+        row.operationCode === 'beginswith' ||
+        row.operationCode === 'doesnotbeginwith' ||
+        row.operationCode === 'endswith' ||
+        row.operationCode === 'doesnotendwith';
+
+      if (isStringLikeOp) {
+        attributeNameForFetch = attribute + 'name';
       }
-    } else if (type === 'guid' || type === 'uniqueidentifier') {
+
+      if (row.operationCode === 'eq' || row.operationCode === 'ne') {
+        const boolVal = row.boolSelectedValue != null ? row.boolSelectedValue : rawValue;
+        if (!boolVal) {
+          return;
+        }
+        valueAttr = String(boolVal);
+      } else {
+        if (meta.fetchval !== null) {
+          valueAttr = meta.fetchval.replace('{0}', rawValue);
+        }
+      }
+
+      attribute = attributeNameForFetch;
+    }
+
+
+
+    else if (type === 'guid' || type === 'uniqueidentifier') {
       const meta = getGuidOperationMeta(row.operationCode);
       if (!meta) return;
       operator = meta.fetchop || meta.code;
@@ -409,6 +479,7 @@ function buildFetchXmlFilter(filterRowsState, filterGroups, scopePredicate) {
   xmlParts.push('</filter>');
   return xmlParts.join('\n');
 }
+
 
 // Helper: generate unique 4-char alias for relationship rows
 function generateUniqueAlias() {
@@ -1254,7 +1325,10 @@ ${rootFilterIndented}${linkEntitiesBlock}
       childRowIds: [],
       scope,         // 'root' or 'link'
       linkId,        // id of this link-entity row (if relationship)
-      parentLinkId   // linkId of parent link-entity (for nested relationships)
+      parentLinkId,  // linkId of parent link-entity (for nested relationships)
+      // NEW: option set support
+      optionSetOptions: [],
+      optionSetSelectedValue: null
     };
     filterRowsState.push(rowState);
     window.filterRowsState = filterRowsState;
@@ -1276,7 +1350,8 @@ ${rootFilterIndented}${linkEntitiesBlock}
   }
 
 
-  function restoreRowSelectionAndUi(rowState, fieldSelect, opSelect, valueInput, relCell, linkTypeSelect, aliasInput) {
+
+  function restoreRowSelectionAndUi(rowState, fieldSelect, opSelect, valueInput, relCell, linkTypeSelect, aliasInput, optionSetSelect) {
     // Restore selection for field or relationship
     if (!rowState.isRelationship && rowState.fieldLogicalName) {
       const targetValue = `field:${rowState.fieldLogicalName}`;
@@ -1289,8 +1364,6 @@ ${rootFilterIndented}${linkEntitiesBlock}
       const option = Array.from(fieldSelect.options).find(o => o.value === targetValue);
       if (option) {
         fieldSelect.value = targetValue;
-      } else {
-        console.warn('[restoreRowSelectionAndUi] Relationship option not found for schemaName:', rowState.relationship.schemaName);
       }
     }
 
@@ -1313,6 +1386,9 @@ ${rootFilterIndented}${linkEntitiesBlock}
       opSelect.innerHTML = '';
       opSelect.style.display = 'none';
       valueInput.style.display = 'none';
+      if (optionSetSelect) {
+        optionSetSelect.style.display = 'none';
+      }
 
       relCell.style.display = '';
       linkTypeSelect.value = rowState.relationship.linkType || 'inner';
@@ -1321,7 +1397,24 @@ ${rootFilterIndented}${linkEntitiesBlock}
       // Normal field mode
       opSelect.style.display = '';
       relCell.style.display = 'none';
-      applyValueVisibility(rowState, opSelect, valueInput);
+      applyValueVisibility(rowState, opSelect, valueInput, optionSetSelect);
+
+      // If this is an optionset row, reload options
+      if (rowState.fieldType === 'optionsetvalue' && optionSetSelect) {
+        optionSetSelect.innerHTML = '';
+        rowState.optionSetOptions = [];
+        // keep rowState.optionSetSelectedValue if you want to restore selection
+
+        loadOptionSetValuesForRow(rowState, optionSetSelect)
+          .then(() => {
+            showToast(`Options reloaded for ${rowState.fieldLogicalName}.`, 2000);
+          })
+          .catch(err => {
+            console.error('Error reloading optionset values', err);
+            showToast(`Failed to reload options for ${rowState.fieldLogicalName}.`, 3000);
+          });
+      }
+
 
       // Only auto-select for brand new, non-relationship rows
       if (!rowState.fieldLogicalName && !rowState.isRelationship && fieldSelect.options.length > 0) {
@@ -1333,10 +1426,12 @@ ${rootFilterIndented}${linkEntitiesBlock}
   }
 
 
+
   // --- Row DOM creation & restoration ---
   function createRowDom(rowState, entityLogicalName) {
     let rowDiv = filterRowsContainer.querySelector(`.filter-row[data-row-id="${rowState.id}"]`);
     let fieldSelect, opSelect, valueInput, headerBtn, relCell, linkTypeSelect, aliasInput;
+    let optionSetSelect; // NEW
 
     if (!rowDiv) {
       rowDiv = document.createElement('div');
@@ -1351,16 +1446,32 @@ ${rootFilterIndented}${linkEntitiesBlock}
 
       const fieldCell = document.createElement('div');
       fieldSelect = document.createElement('select');
+      fieldSelect.name = `filterField_${rowState.id}`;
+      fieldSelect.id = `filterField_${rowState.id}`;
       fieldCell.appendChild(fieldSelect);
 
       const opCell = document.createElement('div');
       opSelect = document.createElement('select');
+      opSelect.name = `filterOperation_${rowState.id}`;
+      opSelect.id = `filterOperation_${rowState.id}`;
       opCell.appendChild(opSelect);
 
       const valueCell = document.createElement('div');
+
+      // Text input
       valueInput = document.createElement('input');
       valueInput.type = 'text';
+      valueInput.name = `filterValue_${rowState.id}`;
+      valueInput.id = `filterValue_${rowState.id}`;
       valueCell.appendChild(valueInput);
+
+      // Option set dropdown (hidden by default)
+      optionSetSelect = document.createElement('select');
+      optionSetSelect.name = `filterOptionSet_${rowState.id}`;
+      optionSetSelect.id = `filterOptionSet_${rowState.id}`;
+      optionSetSelect.style.display = 'none';
+      valueCell.appendChild(optionSetSelect);
+
 
       // Relationship controls cell
       relCell = document.createElement('div');
@@ -1406,7 +1517,12 @@ ${rootFilterIndented}${linkEntitiesBlock}
           opSelect.innerHTML = '';
           opSelect.style.display = '';
           valueInput.style.display = '';
+          if (optionSetSelect) {
+            optionSetSelect.style.display = 'none';
+            optionSetSelect.innerHTML = '';
+          }
           rowState.operationCode = null;
+          rowState.value = '';
           updateFetchXmlOutput();
           return;
         }
@@ -1419,6 +1535,10 @@ ${rootFilterIndented}${linkEntitiesBlock}
 
           rowState.fieldLogicalName = logicalName;
           rowState.fieldType = type;
+
+          showToast(`Field "${logicalName}" selected (type: ${type}).`, 2000);
+
+
           rowState.isRelationship = false;
           rowState.relationship = null;
 
@@ -1428,9 +1548,53 @@ ${rootFilterIndented}${linkEntitiesBlock}
 
           // hide relationship controls
           relCell.style.display = 'none';
+          if (!relCell.classList.contains('filter-row-rel-controls')) {
+            relCell.classList.add('filter-row-rel-controls');
+          }
+          // clear any previous optionset state
+          if (optionSetSelect) {
+            optionSetSelect.innerHTML = '';
+            optionSetSelect.style.display = 'none';
+          }
+          rowState.optionSetOptions = [];
+          rowState.optionSetSelectedValue = null;
 
           populateOperationsForRow(type, opSelect, rowState);
-          applyValueVisibility(rowState, opSelect, valueInput);
+          applyValueVisibility(rowState, opSelect, valueInput, optionSetSelect);
+
+          // if this is an optionset field, load options
+          console.log('Field changed:', logicalName, 'type:', type);
+
+          if (type === 'optionsetvalue') {
+            // Always clear and reload for the new field
+            optionSetSelect.innerHTML = '';
+            rowState.optionSetOptions = [];
+            rowState.optionSetSelectedValue = null;
+
+            loadOptionSetValuesForRow(rowState, optionSetSelect)
+              .then(() => {
+                console.log('Options loaded for', logicalName, rowState.optionSetOptions);
+
+                showToast(`Options loaded for ${logicalName}.`, 2000);
+              })
+              .catch(err => {
+                console.error('Error loading optionset values', err);
+                showToast(`Failed to load options for ${logicalName}.`, 3000);
+              });
+          }
+          // NEW: if this is a boolean field, also load options (two-option set)
+          if (type === 'bool') {
+            loadOptionSetValuesForRow(rowState, optionSetSelect)
+              .then(() => {
+                console.log('Boolean options loaded for', logicalName, rowState.optionSetOptions);
+                showToast(`Boolean options loaded for ${logicalName}.`, 2000);
+              })
+              .catch(err => {
+                console.error('Error loading boolean options', err);
+                showToast(`Failed to load boolean options for ${logicalName}.`, 3000);
+              });
+          }
+
         }
         else if (value.startsWith('related:')) {
           // Relationship mode
@@ -1450,7 +1614,6 @@ ${rootFilterIndented}${linkEntitiesBlock}
           const thisLinkId = rowState.id;
           const parentLinkId = rowState.scope === 'link' ? rowState.linkId : null;
 
-          // Do NOT overwrite relatedEntityLogicalName if this row already has one
           if (!rowState.relatedEntityLogicalName) {
             rowState.relatedEntityLogicalName = referencingEntity;
           }
@@ -1484,14 +1647,22 @@ ${rootFilterIndented}${linkEntitiesBlock}
           opSelect.style.display = 'none';
           valueInput.value = '';
           valueInput.style.display = 'none';
+          if (optionSetSelect) {
+            optionSetSelect.style.display = 'none';
+            optionSetSelect.innerHTML = '';
+          }
           rowState.operationCode = null;
           rowState.value = '';
 
+          if (relCell) {
+            relCell.classList.remove('filter-row-rel-controls');
+          }
           // show relationship controls
           relCell.style.display = '';
           linkTypeSelect.value = linkType;
           aliasInput.value = alias;
         }
+
 
         updateFetchXmlOutput();
       });
@@ -1499,14 +1670,78 @@ ${rootFilterIndented}${linkEntitiesBlock}
       opSelect.addEventListener('change', () => {
         const code = opSelect.value;
         rowState.operationCode = code;
-        applyValueVisibility(rowState, opSelect, valueInput);
+
+        // First, adjust visibility (this will hide/show dropdown/textbox appropriately)
+        applyValueVisibility(rowState, opSelect, valueInput, optionSetSelect);
+
+        // NEW: if we switched to eq/ne, and a dropdown value is already selected,
+        // sync it into rowState.value so FetchXML reflects it immediately.
+        if (code === 'eq' || code === 'ne') {
+          if (rowState.fieldType === 'optionsetvalue') {
+            if (rowState.optionSetSelectedValue != null) {
+              rowState.value = String(rowState.optionSetSelectedValue);
+            }
+          } else if (rowState.fieldType === 'bool') {
+            if (rowState.boolSelectedValue != null) {
+              rowState.value = String(rowState.boolSelectedValue);
+            }
+          }
+        } else {
+          // For non-eq/ne operations, we rely on textbox input;
+          // rowState.value will be updated via valueInput handler.
+          // (applyValueVisibility has already cleared stale numeric values for bool/optionset.)
+        }
+
         updateFetchXmlOutput();
+
+        console.log('op change', {
+          fieldType: rowState.fieldType,
+          code,
+          optionSetSelectedValue: rowState.optionSetSelectedValue,
+          boolSelectedValue: rowState.boolSelectedValue,
+          value: rowState.value
+        });
+
       });
+
+
 
       valueInput.addEventListener('input', () => {
         rowState.value = valueInput.value;
         updateFetchXmlOutput();
       });
+
+      optionSetSelect.addEventListener('change', () => {
+        const selectedVal = optionSetSelect.value;
+
+        if (!selectedVal) {
+          rowState.optionSetSelectedValue = null;
+          rowState.boolSelectedValue = null;
+          rowState.value = '';
+          showToast(`No option selected for ${rowState.fieldLogicalName}.`, 2000);
+        } else if (rowState.fieldType === 'optionsetvalue') {
+          rowState.optionSetSelectedValue = parseInt(selectedVal, 10);
+
+          if (rowState.operationCode === 'eq' || rowState.operationCode === 'ne') {
+            rowState.value = selectedVal;
+          }
+
+          showToast(`Selected option value ${rowState.optionSetSelectedValue} for ${rowState.fieldLogicalName}.`, 2000);
+        } else if (rowState.fieldType === 'bool') {
+          rowState.boolSelectedValue = selectedVal;
+
+          if (rowState.operationCode === 'eq' || rowState.operationCode === 'ne') {
+            rowState.value = selectedVal; // numeric "0" or "1"
+          }
+
+          showToast(`Selected boolean option value ${selectedVal} for ${rowState.fieldLogicalName}.`, 2000);
+        }
+
+        updateFetchXmlOutput();
+      });
+
+
+
 
       linkTypeSelect.addEventListener('change', () => {
         if (rowState.isRelationship && rowState.relationship) {
@@ -1541,6 +1776,13 @@ ${rootFilterIndented}${linkEntitiesBlock}
         }
 
         rowState.relationship.alias = newAlias;
+
+        if (rowState.optionSetSelectedValue != null) {
+          showToast(`Selected option value ${rowState.optionSetSelectedValue} for ${rowState.fieldLogicalName}.`, 2000);
+        } else {
+          showToast(`No option selected for ${rowState.fieldLogicalName}.`, 2000);
+        }
+
         updateFetchXmlOutput();
       });
 
@@ -1556,22 +1798,18 @@ ${rootFilterIndented}${linkEntitiesBlock}
       relCell = rowDiv.querySelector('.filter-row-rel-controls');
       linkTypeSelect = relCell.querySelector('.link-type-select');
       aliasInput = relCell.querySelector('.alias-input');
+
+      optionSetSelect = cells[3].querySelector('.optionset-select');
     }
 
     // Re-populate field dropdown and restore selection
-    console.log('[createRowDom] rowId:', rowState.id, 'relatedEntityLogicalName:', rowState.relatedEntityLogicalName, 'entityLogicalName:', entityLogicalName);
     const dropdownEntity = rowState.relatedEntityLogicalName || entityLogicalName;
-    console.log('[createRowDom] rowId:', rowState.id, 'using dropdownEntity:', dropdownEntity);
 
     populateFieldDropdownForRow(dropdownEntity, fieldSelect).then(() => {
-      console.log('[createRowDom] Populated dropdown for rowId:', rowState.id);
-      restoreRowSelectionAndUi(rowState, fieldSelect, opSelect, valueInput, relCell, linkTypeSelect, aliasInput);
+      restoreRowSelectionAndUi(rowState, fieldSelect, opSelect, valueInput, relCell, linkTypeSelect, aliasInput, optionSetSelect);
     });
 
-
-
-
-    // NEW: if this is a relationship row, render its child rows underneath
+    // If this is a relationship row, render its child rows underneath
     if (rowState.isRelationship && Array.isArray(rowState.childRowIds) && rowState.childRowIds.length > 0) {
       let childrenContainer = rowDiv.querySelector('.relationship-children-container');
       if (!childrenContainer) {
@@ -1580,7 +1818,7 @@ ${rootFilterIndented}${linkEntitiesBlock}
         childrenContainer.style.marginLeft = '20px';
         rowDiv.appendChild(childrenContainer);
       } else {
-        childrenContainer.innerHTML = ''; // important
+        childrenContainer.innerHTML = '';
       }
 
       rowState.childRowIds.forEach(childId => {
@@ -1591,9 +1829,9 @@ ${rootFilterIndented}${linkEntitiesBlock}
       });
     }
 
-
     return rowDiv;
   }
+
 
   // --- field dropdown population ---
   async function populateFieldDropdownForRow(entityLogicalName, fieldSelect) {
@@ -1726,12 +1964,25 @@ ${rootFilterIndented}${linkEntitiesBlock}
     });
 
     if (!rowState.operationCode && opSelect.options.length > 0) {
-      opSelect.selectedIndex = 0;
-      rowState.operationCode = opSelect.value;
+      // For optionset fields, default to 'eq'
+      if (fieldType === 'optionsetvalue') {
+        const eqOption = Array.from(opSelect.options).find(o => o.value === 'eq');
+        if (eqOption) {
+          opSelect.value = 'eq';
+          rowState.operationCode = 'eq';
+        } else {
+          opSelect.selectedIndex = 0;
+          rowState.operationCode = opSelect.value;
+        }
+      } else {
+        opSelect.selectedIndex = 0;
+        rowState.operationCode = opSelect.value;
+      }
     }
+
   }
 
-  function applyValueVisibility(rowState, opSelect, valueInput) {
+  function applyValueVisibility(rowState, opSelect, valueInput, optionSetSelect) {
     const code = opSelect.value;
     const type = rowState.fieldType || 'string';
     let meta;
@@ -1752,14 +2003,86 @@ ${rootFilterIndented}${linkEntitiesBlock}
       meta = getGuidOperationMeta(code);
     }
 
+    // Optionset-specific visibility
+    if (type === 'optionsetvalue') {
+      const isEqNe = (code === 'eq' || code === 'ne');
+
+      if (isEqNe) {
+        if (optionSetSelect) {
+          optionSetSelect.style.display = '';
+        }
+        valueInput.style.display = 'none';
+        valueInput.value = '';
+        rowState.value = '';
+      } else {
+        if (optionSetSelect) {
+          optionSetSelect.style.display = 'none';
+          optionSetSelect.value = '';
+
+        }
+        valueInput.style.display = '';
+        // clear numeric stale value if needed...
+        // Clear any numeric value from previous eq/ne
+        if (rowState.optionSetSelectedValue != null) {
+          rowState.optionSetSelectedValue = null;
+        }
+        if (rowState.value && /^\d+$/.test(rowState.value)) {
+          rowState.value = '';
+          valueInput.value = '';
+        }
+      }
+    } else if (type === 'bool') {
+      const isEqNe = (code === 'eq' || code === 'ne');
+
+      if (isEqNe) {
+        // Dropdown only (boolean options)
+        if (optionSetSelect) {
+          optionSetSelect.style.display = '';
+        }
+        valueInput.style.display = 'none';
+        valueInput.value = '';
+        rowState.value = '';
+      } else {
+        // String-like operations on bool (contains, etc.): use textbox
+        if (optionSetSelect) {
+          optionSetSelect.style.display = 'none';
+          optionSetSelect.value = '';
+
+        }
+        valueInput.style.display = '';
+
+        // NEW: clear any stale numeric value from previous eq/ne
+        if (rowState.boolSelectedValue != null) {
+          rowState.boolSelectedValue = null;
+        }
+        if (rowState.value && /^\d+$/.test(rowState.value)) {
+          // numeric-only value (0/1) is considered stale from dropdown
+          rowState.value = '';
+          valueInput.value = '';
+        }
+      }
+    }
+    else {
+      // Non-optionset, non-bool fields
+      if (optionSetSelect) {
+        optionSetSelect.style.display = 'none';
+      }
+      valueInput.style.display = '';
+    }
+
+    // Operations that don't require a value (null/not-null etc.)
     if (meta && meta.fetchval === null) {
       valueInput.style.display = 'none';
       valueInput.value = '';
       rowState.value = '';
-    } else {
-      valueInput.style.display = '';
+      if (optionSetSelect) {
+        optionSetSelect.style.display = 'none';
+      }
     }
   }
+
+
+
 
   function rebuildFilterUI() {
     filterRowsContainer.innerHTML = '';
@@ -2126,6 +2449,81 @@ ${rootFilterIndented}${linkEntitiesBlock}
 });
 
 // --- Grid & schema helpers ---
+async function loadOptionSetValuesForRow(rowState, optionSetSelect) {
+  const entityLogicalName = rowState.relatedEntityLogicalName;
+  const attributeLogicalName = rowState.fieldLogicalName;
+  if (!entityLogicalName || !attributeLogicalName || !optionSetSelect) {
+    console.warn('loadOptionSetValuesForRow: missing entity or attribute or select', {
+      entityLogicalName,
+      attributeLogicalName,
+      hasSelect: !!optionSetSelect
+    });
+    return;
+  }
+
+  try {
+    let options = [];
+
+    if (rowState.fieldType === 'optionsetvalue') {
+      options = await sendToBackground({
+        type: 'GET_OPTIONSET_VALUES',
+        entityLogicalName,
+        attributeLogicalName
+      });
+    } else if (rowState.fieldType === 'bool') {
+      options = await sendToBackground({
+        type: 'GET_BOOLEAN_OPTION_VALUES',
+        entityLogicalName,
+        attributeLogicalName
+      });
+    } else {
+      console.warn('loadOptionSetValuesForRow called for unsupported type', rowState.fieldType);
+      options = [];
+    }
+
+    console.log('loadOptionSetValuesForRow options for', entityLogicalName, attributeLogicalName, options);
+    rowState.optionSetOptions = options || [];
+
+
+    optionSetSelect.innerHTML = ''; // clear
+
+    // Empty default
+    const emptyOpt = document.createElement('option');
+    emptyOpt.value = '';
+    emptyOpt.textContent = '';
+    optionSetSelect.appendChild(emptyOpt);
+
+    rowState.optionSetOptions.forEach(o => {
+      const opt = document.createElement('option');
+      opt.value = String(o.value);
+      opt.textContent = o.label;
+      optionSetSelect.appendChild(opt);
+    });
+    console.log('Dropdown options count:', optionSetSelect.options.length);
+
+    // Restore previously selected value if any
+    if (rowState.optionSetSelectedValue != null) {
+      const valStr = String(rowState.optionSetSelectedValue);
+      const found = Array.from(optionSetSelect.options).find(o => o.value === valStr);
+      if (found) {
+        optionSetSelect.value = valStr;
+      }
+    }
+
+    // Make sure the dropdown is visible when needed
+    if (rowState.fieldType === 'optionsetvalue' &&
+      (rowState.operationCode === 'eq' || rowState.operationCode === 'ne')) {
+      optionSetSelect.style.display = '';
+    }
+
+  } catch (err) {
+    console.error('Error loading option set values for row', err);
+  }
+}
+
+
+
+
 function buildAttributesGrid(tbody, attributes, selectAllFieldsCheckbox, fieldMetadataMap, existingConfig) {
   tbody.innerHTML = '';
   selectAllFieldsCheckbox.checked = false;

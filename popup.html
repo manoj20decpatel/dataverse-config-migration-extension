@@ -414,12 +414,14 @@
     .filter-row {
       display: grid;
       grid-template-columns: 24px minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
-      /* 5 columns now */
       gap: 4px;
       align-items: center;
       margin-bottom: 4px;
     }
 
+    .filter-row-rel-controls {
+      display: none;
+    }
 
     .filter-row select,
     .filter-row input[type="text"] {

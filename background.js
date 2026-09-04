@@ -1,4 +1,113 @@
 let DATAVERSE_BASE_URL = null;
+// Get option values for a Boolean attribute (two-option set)
+async function getBooleanOptionValues(entityLogicalName, attributeLogicalName) {
+  if (!DATAVERSE_BASE_URL) {
+    console.warn('GET_BOOLEAN_OPTION_VALUES: DATAVERSE_BASE_URL not set');
+    return [];
+  }
+
+  const headers = await getAuthHeaderUsingCrmOrMsal(DATAVERSE_BASE_URL);
+
+  const url =
+    `${DATAVERSE_BASE_URL}/api/data/v9.2/EntityDefinitions(LogicalName='${entityLogicalName}')` +
+    `/Attributes(LogicalName='${attributeLogicalName}')` +
+    `/Microsoft.Dynamics.CRM.BooleanAttributeMetadata` +
+    `?$select=LogicalName` +
+    `&$expand=OptionSet`;
+
+  const resp = await fetch(url, {
+    headers: {
+      ...headers,
+      'Accept': 'application/json'
+    }
+  });
+
+  if (!resp.ok) {
+    console.error('GET_BOOLEAN_OPTION_VALUES error', resp.status, await resp.text());
+    return [];
+  }
+
+  const json = await resp.json();
+  console.log('GET_BOOLEAN_OPTION_VALUES metadata for', entityLogicalName, attributeLogicalName, json);
+
+  const boolOptions = [];
+  if (json.OptionSet) {
+    const trueOpt = json.OptionSet.TrueOption;
+    const falseOpt = json.OptionSet.FalseOption;
+
+    if (trueOpt) {
+      let label = String(trueOpt.Value);
+      if (trueOpt.Label &&
+        trueOpt.Label.LocalizedLabels &&
+        trueOpt.Label.LocalizedLabels.length > 0) {
+        label = trueOpt.Label.LocalizedLabels[0].Label;
+      }
+      boolOptions.push({ value: trueOpt.Value, label });
+    }
+
+    if (falseOpt) {
+      let label = String(falseOpt.Value);
+      if (falseOpt.Label &&
+        falseOpt.Label.LocalizedLabels &&
+        falseOpt.Label.LocalizedLabels.length > 0) {
+        label = falseOpt.Label.LocalizedLabels[0].Label;
+      }
+      boolOptions.push({ value: falseOpt.Value, label });
+    }
+  }
+
+  console.log('GET_BOOLEAN_OPTION_VALUES options array:', boolOptions);
+  return boolOptions;
+}
+
+// Get option set values for a given attribute of an entity
+async function getOptionSetValues(entityLogicalName, attributeLogicalName) {
+  if (!DATAVERSE_BASE_URL) {
+    console.warn('GET_OPTIONSET_VALUES: DATAVERSE_BASE_URL not set');
+    return [];
+  }
+
+  const headers = await getAuthHeaderUsingCrmOrMsal(DATAVERSE_BASE_URL);
+
+  const url =
+    `${DATAVERSE_BASE_URL}/api/data/v9.2/EntityDefinitions(LogicalName='${entityLogicalName}')` +
+    `/Attributes(LogicalName='${attributeLogicalName}')` +
+    `/Microsoft.Dynamics.CRM.PicklistAttributeMetadata` +
+    `?$select=LogicalName` +
+    `&$expand=OptionSet($select=Options)`;
+
+  const resp = await fetch(url, {
+    headers: {
+      ...headers,
+      'Accept': 'application/json'
+    }
+  });
+
+  if (!resp.ok) {
+    console.error('GET_OPTIONSET_VALUES error', resp.status, await resp.text());
+    return [];
+  }
+
+  const json = await resp.json();
+  console.log('GET_OPTIONSET_VALUES metadata for', entityLogicalName, attributeLogicalName, json);
+
+  const options = (json.OptionSet && json.OptionSet.Options) ? json.OptionSet.Options : [];
+  console.log('GET_OPTIONSET_VALUES options array:', options);
+
+  return options.map(o => {
+    const value = o.Value;
+    let label = String(value);
+    if (o.Label &&
+      o.Label.LocalizedLabels &&
+      o.Label.LocalizedLabels.length > 0) {
+      label = o.Label.LocalizedLabels[0].Label;
+    }
+    return { value, label };
+  });
+}
+
+
+
 
 // Use CRM session for same instance; MSAL can be added for cross-instance.
 async function getAuthHeaderUsingCrmOrMsal(targetBaseUrl) {
@@ -311,6 +420,7 @@ async function getFieldMetadata(entityLogicalName) {
         type = 'string';
         break;
     }
+    console.log('Field metadata:', entityLogicalName, a.LogicalName, 'AttributeType:', a.AttributeType, 'mapped type:', type);
 
     const lookupType = ''; // not fetched here
     const primaryKey = !!(a.IsPrimaryId || a.IsPrimaryName);
@@ -705,6 +815,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           break;
         case 'GET_ENTITY_RELATIONSHIPS':
           sendResponse(await getEntityRelationships(message.entityLogicalName));
+          break;
+        case 'GET_OPTIONSET_VALUES':
+          sendResponse(await getOptionSetValues(
+            message.entityLogicalName,
+            message.attributeLogicalName
+          ));
+          break;
+        case 'GET_BOOLEAN_OPTION_VALUES':
+          sendResponse(await getBooleanOptionValues(
+            message.entityLogicalName,
+            message.attributeLogicalName
+          ));
           break;
         default:
           sendResponse({ error: 'Unknown message type' });
